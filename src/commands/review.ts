@@ -4,6 +4,7 @@ import { daemonBody } from "../lib/daemon-json";
 import { resolveRepoRoot } from "../lib/git";
 import { HUNK_INSTALL_HINT, spawnHunkDiff } from "../tui/utils/review";
 import { ensureDaemon } from "./shared";
+import { sessionRoute } from "../lib/session-route";
 
 export function createReviewCommand(): Command {
   return new Command("review")
@@ -26,7 +27,7 @@ export function createReviewCommand(): Command {
 
         try {
           const response = await fetch(
-            `${getDaemonUrl()}/sessions/${sessionId}`,
+            `${getDaemonUrl()}${sessionRoute(sessionId)}`,
           );
 
           if (response.status === 404) {

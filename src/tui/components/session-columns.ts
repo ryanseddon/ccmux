@@ -492,6 +492,9 @@ export const ATTENTION_LABEL_MAX = 12;
  * the theme-dependent color stays in SessionItem (`getAttentionColor`).
  */
 export function getAttentionLabel(session: EnrichedSession): string | null {
+  if (session.trackingMode === "multiplexed" && session.focused !== true) {
+    return null;
+  }
   if (session.pendingTool) return session.pendingTool;
   if (session.inPlanMode || session.attentionType === "plan_approval") {
     return "Plan";

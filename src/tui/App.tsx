@@ -25,6 +25,7 @@ import {
   type NewSessionPlacement,
 } from "./store";
 import { killActionPath, restartActionPath } from "./utils/invoke-actions";
+import { sessionRoute } from "../lib/session-route";
 import {
   formatReviewPrompt,
   HUNK_INSTALL_HINT,
@@ -262,23 +263,45 @@ export function App(props: AppProps) {
       .catch(() => {});
   }
 
-  function selectPane(pane: string) {
+  function selectPane(pane: string, sessionId?: string) {
     if (!ensureSameServer()) return;
-    notifyActivePane(pane);
-    if (props.persistent || props.sidebar) {
-      flashPane(pane);
-    } else {
-      flashPaneDetached(pane);
+    const switchPreparedPane = () => {
+      notifyActivePane(pane);
+      if (props.persistent || props.sidebar) flashPane(pane);
+      else flashPaneDetached(pane);
+      switchToPane(pane)
+        .then((ok) => {
+          if (!ok) {
+            store.actions.showToast("Failed to switch: pane is gone");
+            return;
+          }
+          if (!props.persistent && !props.sidebar) process.exit(0);
+        })
+        .catch(() => store.actions.showToast("Failed to switch: pane is gone"));
+    };
+    const session = sessionId
+      ? store.state.sessions.find((item) => item.id === sessionId)
+      : undefined;
+    if (session?.trackingMode !== "multiplexed") {
+      switchPreparedPane();
+      return;
     }
-    switchToPane(pane).then((ok) => {
-      if (!ok) {
-        // Pane is gone (daemon holds the stale row until its liveness sweep).
-        // Surface it instead of exiting the one-shot picker as if it worked.
-        store.actions.showToast("Failed to switch: pane is gone");
-        return;
-      }
-      if (!props.persistent && !props.sidebar) process.exit(0);
-    });
+    fetch(`${getDaemonUrl()}${sessionRoute(sessionId!, "/prepare-focus")}`, {
+      method: "POST",
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const body = (await response.json().catch(() => null)) as {
+            error?: string;
+          } | null;
+          store.actions.showToast(
+            body?.error ?? "Failed to focus agent session",
+          );
+          return;
+        }
+        switchPreparedPane();
+      })
+      .catch(() => store.actions.showToast("Failed to prepare session focus"));
   }
 
   function activateItem(item: FlatItem) {
@@ -297,7 +320,7 @@ export function App(props: AppProps) {
   function activateSession(session: EnrichedSession) {
     if (session.tmuxPane) {
       store.actions.setActiveSessionId(session.id);
-      selectPane(session.tmuxPane);
+      selectPane(session.tmuxPane, session.id);
       return;
     }
     // Paneless background (background-agent) rows: attach to THAT agent
@@ -365,7 +388,7 @@ export function App(props: AppProps) {
     const agent = session?.agentType ?? "agent";
     try {
       const response = await fetch(
-        `${getDaemonUrl()}/sessions/${sessionId}/send`,
+        `${getDaemonUrl()}${sessionRoute(sessionId, "/send")}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -598,7 +621,7 @@ export function App(props: AppProps) {
     }
     if (session.tmuxPane) {
       store.actions.setActiveSessionId(session.id);
-      selectPane(session.tmuxPane);
+      selectPane(session.tmuxPane, session.id);
       return;
     }
     store.actions.showToast("No pane to switch to");
@@ -973,7 +996,9 @@ export function App(props: AppProps) {
   ): void {
     const sessionId = session.id;
     setMenuDirty(null);
-    const url = new URL(`${getDaemonUrl()}/sessions/${sessionId}/dirty`);
+    const url = new URL(
+      `${getDaemonUrl()}${sessionRoute(sessionId, "/dirty")}`,
+    );
     url.searchParams.set("cwd", sessionCwd(session));
     fetch(url, {
       signal: AbortSignal.timeout(5_000),
@@ -1163,7 +1188,7 @@ export function App(props: AppProps) {
     store.actions.hideContextMenu();
     if (session?.tmuxPane) {
       store.actions.setActiveSessionId(session.id);
-      selectPane(session.tmuxPane);
+      selectPane(session.tmuxPane, session.id);
     }
   }
 
@@ -1184,7 +1209,10 @@ export function App(props: AppProps) {
   function groupContextMenuKill() {
     const cm = store.state.groupContextMenu;
     if (!cm) return;
-    const ids = store.selectedGroupSessions().map((s) => s.id);
+    const ids = store
+      .selectedGroupSessions()
+      .filter((s) => s.trackingMode !== "multiplexed")
+      .map((s) => s.id);
     store.actions.hideGroupContextMenu();
     if (ids.length > 0) {
       store.actions.showConfirmDialog(null, "kill-group", ids);
@@ -1341,7 +1369,7 @@ export function App(props: AppProps) {
     );
     try {
       const url = new URL(
-        `${getDaemonUrl()}/sessions/${session.id}/transcript`,
+        `${getDaemonUrl()}${sessionRoute(session.id, "/transcript")}`,
       );
       url.searchParams.set("turns", String(turns));
       const response = await fetch(url, {
@@ -1827,6 +1855,7 @@ export function App(props: AppProps) {
       color: theme.red,
       action: () => contextMenuConfirm("kill"),
     };
+    const sharedTab = session?.trackingMode === "multiplexed";
     if (session?.trackingMode === "background") {
       return [
         {
@@ -1920,14 +1949,18 @@ export function App(props: AppProps) {
       ...copyItem,
       ...handoffItem,
       ...moveChangesItem,
-      {
-        id: "restart",
-        label: "Restart",
-        hint: "r",
-        color: theme.text,
-        action: () => contextMenuConfirm("restart"),
-      },
-      killItem,
+      ...(sharedTab
+        ? []
+        : [
+            {
+              id: "restart",
+              label: "Restart",
+              hint: "r",
+              color: theme.text,
+              action: () => contextMenuConfirm("restart"),
+            } satisfies ContextMenuItem,
+            killItem,
+          ]),
     ];
   }
 
@@ -1962,6 +1995,9 @@ export function App(props: AppProps) {
   function groupMenuItems(): ContextMenuItem[] {
     const cm = store.state.groupContextMenu;
     const isCollapsed = cm ? store.collapsedGroups().has(cm.groupKey) : false;
+    const hasKillableSession = store
+      .selectedGroupSessions()
+      .some((session) => session.trackingMode !== "multiplexed");
     return [
       {
         // One id for both labels: it is one action whose name reflects the
@@ -2001,13 +2037,17 @@ export function App(props: AppProps) {
         color: theme.text,
         action: groupContextMenuWorktrees,
       },
-      {
-        id: "kill-group",
-        label: "Kill group",
-        hint: "X",
-        color: theme.red,
-        action: groupContextMenuKill,
-      },
+      ...(hasKillableSession
+        ? [
+            {
+              id: "kill-group",
+              label: "Kill group",
+              hint: "X",
+              color: theme.red,
+              action: groupContextMenuKill,
+            } satisfies ContextMenuItem,
+          ]
+        : []),
     ];
   }
 
@@ -2018,7 +2058,7 @@ export function App(props: AppProps) {
    *  silently dropping the failure. */
   function killOrCancelSession(id: string) {
     const session = store.state.sessions.find((s) => s.id === id);
-    const path = session ? killActionPath(session) : `/sessions/${id}/kill`;
+    const path = session ? killActionPath(session) : sessionRoute(id, "/kill");
     fetch(`${getDaemonUrl()}${path}`, { method: "POST" })
       .then(async (response) => {
         if (response.ok) {
@@ -2932,7 +2972,7 @@ export function App(props: AppProps) {
       // A one-shot invoke has no meaningful restart; cancel it instead.
       const path = session
         ? restartActionPath(session)
-        : `/sessions/${sessionId}/restart`;
+        : sessionRoute(sessionId, "/restart");
       fetch(`${getDaemonUrl()}${path}`, { method: "POST" });
     } else if (sessionId) {
       killOrCancelSession(sessionId);
@@ -2993,7 +3033,11 @@ export function App(props: AppProps) {
         store.actions.setSessions(sessions);
         if (activePaneId) {
           store.actions.setActivePaneId(activePaneId);
-          const active = sessions.find((s) => s.tmuxPane === activePaneId);
+          const paneRows = sessions.filter((s) => s.tmuxPane === activePaneId);
+          const active =
+            paneRows.find(
+              (s) => s.trackingMode === "multiplexed" && s.focused === true,
+            ) ?? paneRows.find((s) => s.trackingMode !== "multiplexed");
           if (active) {
             store.actions.setActiveSessionId(active.id);
             store.actions.setSelectedSessionId(active.id);
@@ -3398,7 +3442,7 @@ export function App(props: AppProps) {
       if (key === "return" || key === "enter") {
         const session = store.selectedSession();
         if (session?.tmuxPane) {
-          selectPane(session.tmuxPane);
+          selectPane(session.tmuxPane, session.id);
         }
         event.preventDefault();
         return;
@@ -3547,9 +3591,14 @@ export function App(props: AppProps) {
         } else {
           const sessionToKill = store.selectedSession();
           if (sessionToKill) {
-            store.actions.showConfirmDialog(sessionToKill.id, "kill");
+            if (sessionToKill.trackingMode !== "multiplexed") {
+              store.actions.showConfirmDialog(sessionToKill.id, "kill");
+            }
           } else if (store.selectedGroupHeader()) {
-            const ids = store.selectedGroupSessions().map((s) => s.id);
+            const ids = store
+              .selectedGroupSessions()
+              .filter((s) => s.trackingMode !== "multiplexed")
+              .map((s) => s.id);
             store.actions.showConfirmDialog(null, "kill-group", ids);
           }
         }
@@ -3615,7 +3664,10 @@ export function App(props: AppProps) {
           sseClient?.connect();
         } else {
           const sessionToRestart = store.selectedSession();
-          if (sessionToRestart) {
+          if (
+            sessionToRestart &&
+            sessionToRestart.trackingMode !== "multiplexed"
+          ) {
             store.actions.showConfirmDialog(sessionToRestart.id, "restart");
           }
         }
@@ -3688,7 +3740,8 @@ export function App(props: AppProps) {
         if (
           store.state.showPreview &&
           !store.selectedGroupHeader() &&
-          store.selectedSession()?.tmuxPane
+          store.selectedSession()?.tmuxPane &&
+          store.selectedSession()?.trackingMode !== "multiplexed"
         ) {
           store.actions.enterPreviewFocus();
           event.preventDefault();
@@ -3777,7 +3830,10 @@ export function App(props: AppProps) {
               target.type === "session" &&
               target.filteredSession.session.tmuxPane
             ) {
-              selectPane(target.filteredSession.session.tmuxPane);
+              selectPane(
+                target.filteredSession.session.tmuxPane,
+                target.filteredSession.session.id,
+              );
             }
           }
           event.preventDefault();
@@ -3815,7 +3871,7 @@ export function App(props: AppProps) {
             onSubmit={() => {
               const session = store.selectedSession();
               if (session?.tmuxPane) {
-                selectPane(session.tmuxPane);
+                selectPane(session.tmuxPane, session.id);
               }
             }}
           />

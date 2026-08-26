@@ -100,6 +100,7 @@ import {
 } from "./pane-io";
 import { DbusNotifier } from "../lib/notify-dbus";
 import { isTerminalFrontmost, resolveTerminalBundleId } from "./focus";
+import { requestOpenCodeFocus } from "./opencode-focus";
 import {
   getActiveTmuxClientPid,
   resolveActiveTmuxClientTty,
@@ -360,6 +361,15 @@ export class Daemon {
     return handleNotificationAction(input, {
       getSession: (id) => this.sessionManager.getSession(id),
       getAgent: (agentType) => this.agents.find((a) => a.name === agentType),
+      prepareFocus: (session) =>
+        session.trackingMode !== "multiplexed"
+          ? Promise.resolve(true)
+          : session.uiInstanceId && session.nativeSessionId
+            ? requestOpenCodeFocus({
+                uiInstanceId: session.uiInstanceId,
+                sessionId: session.nativeSessionId,
+              })
+            : Promise.resolve(false),
       sendKey: sendKeyToPane,
       sendText: sendLiteralToPane,
       capturePane: (paneId) => capturePane(paneId),
@@ -758,6 +768,19 @@ export class Daemon {
         if (!tty) return;
         const pane = paneByTty.get(tty);
         if (!pane) return;
+        if (
+          proc.agentType === "opencode" &&
+          this.sessionManager
+            .getSessions()
+            .some(
+              (session) =>
+                session.agentType === "opencode" &&
+                session.trackingMode === "multiplexed" &&
+                session.tmuxPane === pane.paneId,
+            )
+        ) {
+          return;
+        }
 
         const cwd = proc.cwd ?? pane.currentPath;
         if (!cwd) return;
@@ -1164,6 +1187,7 @@ export class Daemon {
     if (!adapter) return;
     const ctx = this.hookManager.getContext();
     if (!ctx) return;
+    await adapter.syncMarkers?.(ctx);
     await reconcileSessionMarkerLinks(adapter, ctx, processStartTimeByPid);
   }
 

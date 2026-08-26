@@ -473,6 +473,9 @@ export class Notifier {
     session: Readonly<Session>,
   ): Promise<boolean> {
     if (session.trackingMode === "background") return false;
+    if (session.trackingMode === "multiplexed" && session.focused !== true) {
+      return false;
+    }
     if (!session.tmuxPane) return false;
     try {
       const activePaneId = await this.deps.getActivePaneId();

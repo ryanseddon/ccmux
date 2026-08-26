@@ -111,6 +111,7 @@ function makeDeps(
     /** Foreground command for the liveness guard. `undefined` => "claude"
      *  (agent alive); pass a shell name or `null` to trip the guard. */
     paneCommand: string | null;
+    prepareFocus: (session: Session) => Promise<boolean>;
   }> = {},
 ) {
   const sendKeyCalls: Array<{ pane: string; key: string }> = [];
@@ -124,6 +125,7 @@ function makeDeps(
     getSession: (id) => (session && session.id === id ? session : undefined),
     getAgent:
       overrides.getAgent ?? ((t) => BUILTIN_AGENTS.find((a) => a.name === t)),
+    prepareFocus: overrides.prepareFocus,
     sendKey: async (pane, key) => {
       sendKeyCalls.push({ pane, key });
       return overrides.sendKeyResult ?? true;
@@ -223,6 +225,30 @@ describe("handleNotificationAction: default (jump)", () => {
 });
 
 describe("handleNotificationAction: approve/deny", () => {
+  it("fails closed before typing when an exact multiplexed tab cannot be focused", async () => {
+    const session = mkSession({
+      agentType: "opencode",
+      trackingMode: "multiplexed",
+      uiInstanceId: "ui",
+      nativeSessionId: "tab",
+    });
+    const { deps, sendKeyCalls, sendTextCalls } = makeDeps(session, {
+      prepareFocus: async () => false,
+    });
+    const res = await handleNotificationAction(
+      {
+        sessionId: session.id,
+        action: "approve",
+        statusChangedAt: STAMP,
+        attentionGeneration: 0,
+      },
+      deps,
+    );
+    expect(res.code).toBe(409);
+    expect(sendKeyCalls).toHaveLength(0);
+    expect(sendTextCalls).toHaveLength(0);
+  });
+
   it("approve sends the mapped keys and returns 200", async () => {
     const session = mkSession();
     const { deps, sendKeyCalls } = makeDeps(session);

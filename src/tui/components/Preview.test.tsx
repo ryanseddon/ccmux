@@ -249,6 +249,26 @@ describe("Preview pane capture", () => {
     return frame;
   }
 
+  it("shows tab metadata and never captures an unfocused multiplexed row", async () => {
+    let captures = 0;
+    captureImpl = async () => {
+      captures++;
+      return "FOCUSED_TAB_CONTENT";
+    };
+    await renderReactive(
+      mockEnrichedSession({
+        trackingMode: "multiplexed",
+        focused: false,
+        title: "Hidden Tab",
+        tmuxPane: "%1",
+      }),
+    );
+    const frame = await pollFrame(12);
+    expect(frame).toContain("OpenCode tab: Hidden Tab");
+    expect(frame).not.toContain("FOCUSED_TAB_CONTENT");
+    expect(captures).toBe(0);
+  });
+
   it("drops a stale capture when the selection moves to another pane", async () => {
     // Pane A's capture is slow; B's is fast. A's late resolve must NOT paint
     // its content under row B (the identity guard) nor corrupt the backoff.

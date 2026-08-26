@@ -106,6 +106,7 @@ export interface NotificationActionResult {
 export interface NotificationActionDeps {
   getSession: (sessionId: string) => Session | undefined;
   getAgent: (agentType: string) => AgentDef | undefined;
+  prepareFocus?: (session: Session) => Promise<boolean>;
   /** Named tmux keys for approve/deny (see `sendKeyToPane`). */
   sendKey: (paneId: string, key: string) => Promise<boolean>;
   /** Literal text + Enter for the answer reply (see `sendLiteralToPane`). */
@@ -420,6 +421,17 @@ export async function handleNotificationAction(
   if (action === "default") {
     await deps.jump(session);
     return { code: 200, ok: true, action };
+  }
+
+  if (
+    session.trackingMode === "multiplexed" &&
+    (!deps.prepareFocus || !(await deps.prepareFocus(session)))
+  ) {
+    return {
+      code: 409,
+      ok: false,
+      error: "OpenCode did not acknowledge the exact tab focus request",
+    };
   }
 
   // Every mutating-action rejection re-notifies through here so a carried reply

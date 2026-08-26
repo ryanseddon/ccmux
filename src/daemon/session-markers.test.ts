@@ -20,6 +20,7 @@ import {
   getAllSessionPidMarkers,
   refreshMarkerCache,
   getSessionPidMarker,
+  filterMarkerCache,
   cleanupStaleMarkers,
   parseMarkerFile,
 } from "./session-markers";
@@ -128,6 +129,33 @@ describe("session-markers", () => {
       rmSync(join(testMarkersDir, "s1.json"));
       refreshMarkerCache();
       expect(getSessionPidMarker("s1")).toBeNull();
+    });
+
+    it("keeps the same native session in two OpenCode UI instances", () => {
+      writeMarker(
+        "ui-a-same",
+        makeMarker({
+          agent_type: "opencode",
+          session_id: "same",
+          ui_instance_id: "ui-a",
+        }),
+      );
+      writeMarker(
+        "ui-b-same",
+        makeMarker({
+          agent_type: "opencode",
+          session_id: "same",
+          ui_instance_id: "ui-b",
+        }),
+      );
+
+      refreshMarkerCache();
+
+      expect(
+        filterMarkerCache((marker) => marker.session_id === "same").map(
+          (marker) => marker.ui_instance_id,
+        ),
+      ).toEqual(expect.arrayContaining(["ui-a", "ui-b"]));
     });
   });
 
@@ -280,6 +308,31 @@ describe("session-markers", () => {
       expect(cleaned).toBe(1);
       expect(existsSync(join(testMarkersDir, "dup-old.json"))).toBe(false);
       expect(existsSync(join(testMarkersDir, "dup-new.json"))).toBe(true);
+    });
+
+    it("does not dedupe one native session across OpenCode UI instances", () => {
+      writeMarker(
+        "ui-a-same",
+        makeMarker({
+          agent_type: "opencode",
+          pid: 100,
+          session_id: "same",
+          ui_instance_id: "ui-a",
+        }),
+      );
+      writeMarker(
+        "ui-b-same",
+        makeMarker({
+          agent_type: "opencode",
+          pid: 100,
+          session_id: "same",
+          ui_instance_id: "ui-b",
+        }),
+      );
+
+      expect(cleanup(new Set([100]), undefined, () => true)).toBe(0);
+      expect(existsSync(join(testMarkersDir, "ui-a-same.json"))).toBe(true);
+      expect(existsSync(join(testMarkersDir, "ui-b-same.json"))).toBe(true);
     });
 
     it("deletes markers with TTY mismatch when activeTtys provided", () => {

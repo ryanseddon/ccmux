@@ -9,12 +9,18 @@ export type SessionStatus = "working" | "waiting" | "idle";
  * How ccmux identifies and tracks a live session.
  * - `native`: tracked by native agent session id (Claude/Codex via hooks).
  * - `pane`: tracked by tmux pane identity (process + terminal scanning).
+ * - `multiplexed`: one native session among several sharing an agent process
+ *   and tmux pane (OpenCode V2 tabs).
  * - `background`: a Claude Code background/background agent (dispatched via
  *   `claude --bg` / the agent view). Paneless: it has a PID, cwd, and a JSONL
  *   transcript but no tmux pane. Sourced entirely from Claude's own
  *   `roster.json` / `state.json`, not from any ccmux hook or pane scan.
  */
-export type SessionTrackingMode = "native" | "pane" | "background";
+export type SessionTrackingMode =
+  | "native"
+  | "pane"
+  | "multiplexed"
+  | "background";
 
 /**
  * A linked artifact a background agent produced, from `state.json`
@@ -129,6 +135,12 @@ export interface Session {
   trackingMode: SessionTrackingMode;
   /** Native agent session ID used by resume commands when available */
   nativeSessionId?: string;
+  /** Owning UI process identity for a multiplexed native session. */
+  uiInstanceId?: string;
+  /** Agent-supplied display title for a multiplexed native session. */
+  title?: string;
+  /** Whether this native session is focused in its owning UI instance. */
+  focused?: boolean;
   /** Project name derived from cwd */
   project: string;
   /** Working directory of the session */

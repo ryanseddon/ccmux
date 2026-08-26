@@ -230,7 +230,8 @@ function projectCellWidth(
   return (
     displayWidth(fitted.prefix) +
     displayWidth(fitted.dirname) +
-    displayWidth(fitted.branchLabel)
+    displayWidth(fitted.branchLabel) +
+    (session.title ? displayWidth(session.title) + 3 : 0)
   );
 }
 
@@ -480,6 +481,11 @@ const FieldCell: Component<{
                   <text fg={dimColor(ctx, theme.blue)}>+</text>
                 </Show>
               </Show>
+            )}
+          </Show>
+          <Show when={ctx.session.title}>
+            {(title: () => string) => (
+              <text fg={dimColor(ctx, theme.mauve)}> {`[${title()}]`}</text>
             )}
           </Show>
         </box>
@@ -879,7 +885,10 @@ export const SessionItem: Component<SessionItemProps> = (props) => {
       promptFloor +
       2 + // small margin so the truncated content sits inside its flex box
       scrollbarReserve(); // scrollbox eats width the terminal size hides
-    return Math.max(12, effectiveWidth() - reserved);
+    const titleWidth = props.session.title
+      ? displayWidth(props.session.title) + 3
+      : 0;
+    return Math.max(12, effectiveWidth() - reserved - titleWidth);
   });
 
   // Budget for the prompt cell: full width minus the item's horizontal
@@ -967,6 +976,8 @@ export const SessionItem: Component<SessionItemProps> = (props) => {
       return (
         props.selected ||
         (props.session.status === "idle" &&
+          (props.session.trackingMode !== "multiplexed" ||
+            props.session.focused === true) &&
           props.session.attentionState !== null)
       );
     },

@@ -77,6 +77,7 @@ import { join } from "path";
 import { resolvedHomeDir } from "../lib/config";
 import type { sendLiteralToPane, sendPromptToPane } from "./pane-io";
 import { MAX_SPAWN_PROMPT_BYTES } from "./spawn-command";
+import { sessionRoute } from "../lib/session-route";
 
 /**
  * Access private methods/fields on DaemonServer for unit testing.
@@ -160,6 +161,14 @@ type ServerInternals = {
   handleSSE(): Response;
   invocationManager: InvocationManager;
   handleRequest(req: Request): Promise<Response>;
+  handlePrepareFocus(
+    sessionId: string,
+    headers: Record<string, string>,
+  ): Promise<Response>;
+  requestOpenCodeFocus: (target: {
+    uiInstanceId: string;
+    sessionId: string;
+  }) => Promise<boolean>;
   getServerSocketPath(): Promise<string | null>;
   notePaneScanFailure(message: string): void;
   broadcastEvent(event: SSEEvent): void;
@@ -221,6 +230,157 @@ function createServer(
     internals: server as unknown as ServerInternals,
   };
 }
+
+describe("POST /sessions/:id/prepare-focus", () => {
+  it("is a no-op success for ordinary rows", async () => {
+    const { manager, internals } = createServer();
+    const session = manager.createPaneTrackedSession({
+      agentType: "opencode",
+      paneId: "%1",
+      cwd: "/repo",
+      pid: 100,
+    });
+    internals.requestOpenCodeFocus = mock(async () => {
+      throw new Error("ordinary rows must not request tab focus");
+    });
+
+    const response = await internals.handlePrepareFocus(session.id, {});
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ success: true, prepared: false });
+  });
+
+  it("requires an exact ack for a multiplexed row without mutating focus", async () => {
+    const { manager, internals } = createServer();
+    const session = manager.createMultiplexedOpenCodeSession({
+      uiInstanceId: "77",
+      nativeSessionId: "ses-tab",
+      paneId: "%1",
+      cwd: "/repo",
+      pid: 100,
+      focused: false,
+      state: { status: "idle" },
+    });
+    const request = mock(async () => false);
+    internals.requestOpenCodeFocus = request;
+
+    const response = await internals.handlePrepareFocus(session.id, {});
+
+    expect(response.status).toBe(409);
+    expect(request).toHaveBeenCalledWith({
+      uiInstanceId: "77",
+      sessionId: "ses-tab",
+    });
+    expect(manager.getSession(session.id)?.focused).toBe(false);
+  });
+
+  it("succeeds only after the multiplexed target is acknowledged", async () => {
+    const { manager, internals } = createServer();
+    const session = manager.createMultiplexedOpenCodeSession({
+      uiInstanceId: "88",
+      nativeSessionId: "ses-open",
+      paneId: "%2",
+      cwd: "/repo",
+      pid: 101,
+      state: { status: "working" },
+    });
+    internals.requestOpenCodeFocus = mock(async () => true);
+
+    const response = await internals.handleRequest(
+      new Request(`http://127.0.0.1/sessions/${session.id}/prepare-focus`, {
+        method: "POST",
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ success: true, prepared: true });
+  });
+
+  it("resolves a pane reference to its focused multiplexed row", async () => {
+    const { manager, internals } = createServer();
+    for (const [nativeSessionId, focused] of [
+      ["hidden", false],
+      ["visible", true],
+    ] as const) {
+      manager.createMultiplexedOpenCodeSession({
+        uiInstanceId: "ui",
+        nativeSessionId,
+        paneId: "%7",
+        cwd: "/repo",
+        pid: 101,
+        focused,
+        state: { status: "idle" },
+      });
+    }
+    const request = mock(async () => true);
+    internals.requestOpenCodeFocus = request;
+
+    const response = await internals.handleRequest(
+      new Request(
+        `http://127.0.0.1${sessionRoute("%7", "/prepare-focus")}`,
+        { method: "POST" },
+      ),
+    );
+
+    expect(response.status).toBe(200);
+    expect(request).toHaveBeenCalledWith({
+      uiInstanceId: "ui",
+      sessionId: "visible",
+    });
+  });
+
+  it("decodes a compound ID exactly once on generic and suffixed routes", async () => {
+    const { manager, internals } = createServer();
+    const session = manager.createMultiplexedOpenCodeSession({
+      uiInstanceId: "ui/one",
+      nativeSessionId: "ses/tab",
+      paneId: "%2",
+      cwd: "/repo",
+      pid: 101,
+      focused: true,
+      state: { status: "idle" },
+    });
+    internals.requestOpenCodeFocus = mock(async () => true);
+
+    const get = await internals.handleRequest(
+      new Request(`http://127.0.0.1${sessionRoute(session.id)}`),
+    );
+    const prepare = await internals.handleRequest(
+      new Request(
+        `http://127.0.0.1${sessionRoute(session.id, "/prepare-focus")}`,
+        { method: "POST" },
+      ),
+    );
+
+    expect(get.status).toBe(200);
+    expect(prepare.status).toBe(200);
+  });
+
+  it("rejects malformed percent and raw multi-segment routes", async () => {
+    const { internals } = createServer();
+    for (const path of ["/sessions/%zz", "/sessions/a/b"]) {
+      const response = await internals.handleRequest(
+        new Request(`http://127.0.0.1${path}`),
+      );
+      expect(response.status).toBe(400);
+    }
+  });
+
+  it("serves an encoded route whose decoded session ID contains path separators", async () => {
+    const { manager, internals } = createServer();
+    const id = "valid/id\\with-separators";
+    manager.createSession(id, "/repo/session.jsonl");
+
+    const response = await internals.handleRequest(
+      new Request(`http://127.0.0.1${sessionRoute(id)}`),
+    );
+
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as { session: { id: string } }).session.id).toBe(
+      id,
+    );
+  });
+});
 
 /**
  * Environment for the real-git fixtures below, hermetic in both directions.
@@ -1330,6 +1490,24 @@ describe("DaemonServer", () => {
   });
 
   describe("handleRestartSession", () => {
+    it("refuses to restart one multiplexed tab because its process is shared", async () => {
+      const { manager, internals } = createServer();
+      const session = manager.createMultiplexedOpenCodeSession({
+        uiInstanceId: "ui",
+        nativeSessionId: "tab",
+        paneId: "%1",
+        cwd: "/repo",
+        pid: 1,
+        state: { status: "idle" },
+      });
+      const response = await internals.handleRestartSession(session.id, {});
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error:
+          "Cannot restart one OpenCode tab: its process is shared with other tabs",
+      });
+    });
+
     it("should return 404 for unknown session", async () => {
       const { internals } = createServer();
 
@@ -1498,6 +1676,24 @@ describe("DaemonServer", () => {
   });
 
   describe("handleKillSession", () => {
+    it("refuses to kill one multiplexed tab because its process is shared", async () => {
+      const { manager, internals } = createServer();
+      const session = manager.createMultiplexedOpenCodeSession({
+        uiInstanceId: "ui",
+        nativeSessionId: "tab",
+        paneId: "%1",
+        cwd: "/repo",
+        pid: 1,
+        state: { status: "idle" },
+      });
+      const response = await internals.handleKillSession(session.id, {});
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error:
+          "Cannot kill one OpenCode tab: its process is shared with other tabs",
+      });
+    });
+
     it("should return 404 for unknown session", async () => {
       const { internals } = createServer();
 
@@ -1711,6 +1907,41 @@ describe("DaemonServer", () => {
   });
 
   describe("handleSendToSession", () => {
+    it("fails closed before typing when multiplexed focus is not acknowledged", async () => {
+      const paneSendDeps = {
+        sendLiteralToPane: mock(async () => true),
+        sendPromptToPane: mock(async () => true),
+      };
+      const { manager, internals } = createServer(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        paneSendDeps,
+      );
+      const session = manager.createMultiplexedOpenCodeSession({
+        uiInstanceId: "ui",
+        nativeSessionId: "tab",
+        paneId: "%1",
+        cwd: "/repo",
+        pid: 1,
+        focused: false,
+        state: { status: "idle" },
+      });
+      internals.requestOpenCodeFocus = mock(async () => false);
+      const response = await internals.handleSendToSession(
+        session.id,
+        new Request("http://localhost/send", {
+          method: "POST",
+          body: JSON.stringify({ text: "hello" }),
+        }),
+        {},
+      );
+      expect(response.status).toBe(409);
+      expect(paneSendDeps.sendLiteralToPane).not.toHaveBeenCalled();
+    });
+
     it("should return 404 for unknown session", async () => {
       const { internals } = createServer();
       const req = new Request("http://localhost/sessions/x/send", {
@@ -2289,6 +2520,31 @@ describe("DaemonServer", () => {
       expect(response.status).toBe(200);
       expect(data.success).toBe(true);
       expect(data.sessionId).toBe("s1");
+    });
+
+    it("resolves a shared pane to its focused OpenCode tab", async () => {
+      const { manager, internals } = createServer();
+      manager.createMultiplexedOpenCodeSession({
+        uiInstanceId: "ui",
+        nativeSessionId: "hidden",
+        paneId: "%10",
+        cwd: "/repo",
+        pid: 10,
+        focused: false,
+        state: { status: "idle" },
+      });
+      const focused = manager.createMultiplexedOpenCodeSession({
+        uiInstanceId: "ui",
+        nativeSessionId: "focused",
+        paneId: "%10",
+        cwd: "/repo",
+        pid: 10,
+        focused: true,
+        state: { status: "idle" },
+      });
+
+      const response = await postActivePane(internals, "%10");
+      expect(await response.json()).toMatchObject({ sessionId: focused.id });
     });
 
     it("should return null sessionId for unknown pane", async () => {
@@ -8762,10 +9018,7 @@ describe("GET /prs", () => {
     const { internals } = createServer();
     const restore = withStubbedGh([LIST_ROW]);
     try {
-      const byCwd = await listPRs(
-        internals,
-        `cwd=${encodeURIComponent(repo)}`,
-      );
+      const byCwd = await listPRs(internals, `cwd=${encodeURIComponent(repo)}`);
       expect(
         ((await byCwd.json()) as PRListResponse).repos[0]?.repoRoot,
       ).toContain("repo");
@@ -8894,9 +9147,7 @@ describe("GET /prs caching", () => {
     repo: string,
   ): Promise<PRListResponse> {
     const res = await internals.handleRequest(
-      new Request(
-        `http://127.0.0.1:2269/prs?repo=${encodeURIComponent(repo)}`,
-      ),
+      new Request(`http://127.0.0.1:2269/prs?repo=${encodeURIComponent(repo)}`),
     );
     return (await res.json()) as PRListResponse;
   }
@@ -8953,7 +9204,9 @@ describe("GET /prs caching", () => {
       const second = listPRs(internals, repo);
       await Promise.all([first, second]);
       expect(gh.calls()).toBe(1);
-      expect([...internals.prListCache.entries.values()][0]?.done).not.toBeNull();
+      expect(
+        [...internals.prListCache.entries.values()][0]?.done,
+      ).not.toBeNull();
     } finally {
       gh.restore();
     }
@@ -9151,15 +9404,19 @@ describe("GET /issues", () => {
   function withSplitGh() {
     const bin = join(root, "bin");
     mkdirSync(bin, { recursive: true });
-    writeFileSync(join(bin, "gh"), [
-      "#!/bin/sh",
-      `echo "$1" >> '${join(bin, "calls")}'`,
-      'if [ "$1" = "issue" ]; then',
-      `  cat '${join(bin, "issues.json")}'`,
-      "else",
-      `  cat '${join(bin, "prs.json")}'`,
-      "fi",
-    ].join("\n") + "\n", { mode: 0o755 });
+    writeFileSync(
+      join(bin, "gh"),
+      [
+        "#!/bin/sh",
+        `echo "$1" >> '${join(bin, "calls")}'`,
+        'if [ "$1" = "issue" ]; then',
+        `  cat '${join(bin, "issues.json")}'`,
+        "else",
+        `  cat '${join(bin, "prs.json")}'`,
+        "fi",
+      ].join("\n") + "\n",
+      { mode: 0o755 },
+    );
     writeFileSync(join(bin, "issues.json"), JSON.stringify([ISSUE_ROW]));
     writeFileSync(join(bin, "prs.json"), JSON.stringify([]));
     writeFileSync(join(bin, "calls"), "");

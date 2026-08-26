@@ -90,6 +90,7 @@ function withFetch(opts: {
   session?: SessionShape;
   serverInfoSocket?: string | null;
   serverInfoFails?: boolean;
+  prepareStatus?: number;
 }): () => void {
   const original = globalThis.fetch;
   globalThis.fetch = (async (url: string | URL) => {
@@ -103,6 +104,17 @@ function withFetch(opts: {
     }
     if (u.includes("/seen")) {
       return { ok: true, json: async () => ({}) } as Response;
+    }
+    if (u.includes("/prepare-focus")) {
+      const status = opts.prepareStatus ?? 200;
+      return {
+        status,
+        ok: status >= 200 && status < 300,
+        json: async () =>
+          status >= 200 && status < 300
+            ? { success: true }
+            : { error: "exact tab focus was not acknowledged" },
+      } as Response;
     }
     // GET /sessions/:id
     return {
@@ -229,6 +241,37 @@ describe("ccmux switch cross-server refusal", () => {
       restoreExit();
       restoreFetch();
       restoreTmux();
+    }
+  });
+});
+
+describe("ccmux switch session focus preparation", () => {
+  it("fails closed before tmux when the daemon cannot focus the exact tab", async () => {
+    const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+    const restoreTmux = withTmux("/tmp/same-sock,1,0");
+    const restoreFetch = withFetch({
+      serverInfoSocket: "/tmp/same-sock",
+      prepareStatus: 409,
+    });
+    const restoreExit = withExitSentinel();
+    const spawn = withSpawnSpy();
+    try {
+      const exit = await runSwitch();
+      expect(exit?.code).toBe(1);
+      expect(spawn.calls.some((call) => call[1] === "switch-client")).toBe(
+        false,
+      );
+      expect(
+        errorSpy.mock.calls.some((call) =>
+          String(call[0]).includes("not acknowledged"),
+        ),
+      ).toBe(true);
+    } finally {
+      spawn.restore();
+      restoreExit();
+      restoreFetch();
+      restoreTmux();
+      errorSpy.mockRestore();
     }
   });
 });

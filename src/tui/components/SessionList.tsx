@@ -69,10 +69,18 @@ export type RowAnchor = (index: number) => { x: number; y: number } | null;
  * `activePaneId` and gets falsely highlighted as the active pane.
  */
 export function isActivePaneRow(
-  session: { tmuxPane: string | null },
+  session: {
+    tmuxPane: string | null;
+    trackingMode?: string;
+    focused?: boolean;
+  },
   activePaneId: string | null | undefined,
 ): boolean {
-  return session.tmuxPane !== null && session.tmuxPane === activePaneId;
+  return (
+    session.tmuxPane !== null &&
+    session.tmuxPane === activePaneId &&
+    (session.trackingMode !== "multiplexed" || session.focused === true)
+  );
 }
 
 /** Columns a keyboard-opened row menu is inset from the list's left edge, so
@@ -213,7 +221,9 @@ export const SessionList: Component<SessionListProps> = (props) => {
           props.activePaneId,
         )}
         isActiveSession={
-          item.filteredSession.session.id === props.activeSessionId
+          item.filteredSession.session.id === props.activeSessionId &&
+          (item.filteredSession.session.trackingMode !== "multiplexed" ||
+            item.filteredSession.session.focused === true)
         }
         layout={layout()}
         dimmed={props.dimmed}

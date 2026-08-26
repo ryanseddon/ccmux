@@ -87,6 +87,13 @@ describe("SessionItem", () => {
     expect(frame).toContain("myapp");
   });
 
+  it("renders an OpenCode tab title beside the project", async () => {
+    const frame = await renderItem({
+      session: mockEnrichedSession({ title: "Tab Alpha" }),
+    });
+    expect(frame).toContain("[Tab Alpha]");
+  });
+
   it("renders git branch", async () => {
     const frame = await renderItem({
       session: mockEnrichedSession({ gitBranch: "main" }),
@@ -1329,6 +1336,23 @@ describe("SessionItem right-aligned fields", () => {
       120,
     );
     expect(frame).toContain("please refactor the entire…");
+  });
+
+  it("budgets an inline prompt around a multiplexed tab title", async () => {
+    const frame = await renderItem(
+      {
+        session: mockEnrichedSession({
+          title: "Authentication tab",
+          lastPrompt:
+            "please refactor the entire authentication module and add tests",
+          tmuxTarget: "dev:1.0",
+          lastActivityAt: "2024-01-15T11:59:00Z",
+        }),
+      },
+      120,
+    );
+    expect(frame).toContain("[Authentication tab]");
+    expect(frame).toContain("please refactor the entire authen…");
   });
 
   it("reserves the columns a short wide-glyph prompt needs on row 1", async () => {

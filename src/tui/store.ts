@@ -866,7 +866,13 @@ export function createTUIStore(options: TUIStoreOptions = {}) {
       }
       const now = Date.now();
       const livePanes = new Set(
-        sessions.filter((s) => s.tmuxPane).map((s) => s.tmuxPane!),
+        sessions
+          .filter(
+            (s) =>
+              s.tmuxPane &&
+              (s.trackingMode !== "multiplexed" || s.focused === true),
+          )
+          .map((s) => s.tmuxPane!),
       );
       // Bound the cache to panes this batch actually cares about: a pane
       // that dropped out of the session list (session closed) has nothing
@@ -878,7 +884,11 @@ export function createTUIStore(options: TUIStoreOptions = {}) {
       const cache = new Map<string, string>();
       await Promise.all(
         sessions
-          .filter((s) => s.tmuxPane)
+          .filter(
+            (s) =>
+              s.tmuxPane &&
+              (s.trackingMode !== "multiplexed" || s.focused === true),
+          )
           .map(async (s) => {
             const paneId = s.tmuxPane!;
             const cached = paneContentCache.get(paneId);
@@ -1052,6 +1062,7 @@ export function createTUIStore(options: TUIStoreOptions = {}) {
         "lastPrompt",
         (s: EnrichedSession) =>
           groupBy === "none" ? "" : getGroupKey(s, groupBy),
+        "title",
       ],
       threshold: 0.3,
     });
@@ -1152,6 +1163,7 @@ export function createTUIStore(options: TUIStoreOptions = {}) {
               fzResult[0]?.score ?? 0,
               fzResult[2]?.score ?? 0,
               fzResult[4]?.score ?? 0,
+              fzResult[5]?.score ?? 0,
             )
           : 0;
         const cwdFz = fzResult?.[1]?.score ?? 0;

@@ -422,6 +422,31 @@ describe("Notifier", () => {
   });
 
   describe("focus suppression", () => {
+    it("does not treat an unfocused multiplexed tab as viewed", async () => {
+      const h = createHarness({
+        getActivePaneId: async () => "%1",
+        isTerminalFrontmost: async () => true,
+      });
+      const notifier = new Notifier(h.deps);
+      notifier.start();
+      h.advanceTime(PAST_GRACE_WINDOW);
+      const session = h.sessionManager.createMultiplexedOpenCodeSession({
+        uiInstanceId: "ui",
+        nativeSessionId: "hidden",
+        paneId: "%1",
+        cwd: "/repo",
+        pid: 1,
+        focused: false,
+        state: { status: "working" },
+      });
+      h.sessionManager.updateSession(session.id, {
+        status: "waiting",
+        attentionType: "permission",
+      });
+      await flush();
+      expect(h.delivered).toHaveLength(1);
+    });
+
     it("suppresses when active pane matches and terminal is frontmost", async () => {
       const h = createHarness({
         getActivePaneId: async () => "%1",

@@ -138,6 +138,9 @@ export interface HookAdapter {
     marker: SessionPidMarker,
     ctx: HookManagerContext,
   ): Promise<void>;
+
+  /** Per-scan repair for adapters whose marker set directly owns row shape. */
+  syncMarkers?(ctx: HookManagerContext): Promise<void>;
 }
 
 /**

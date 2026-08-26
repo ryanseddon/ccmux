@@ -372,6 +372,7 @@ export async function reconcileOne(
   // state.json-derived status to idle). They carry no marker, so the
   // marker-event path never resolves to them either, but this guards it.
   if (isBackgroundSession(session)) return;
+  if (session.trackingMode === "multiplexed") return;
   if (session.trackingMode === "native") {
     if (NATIVE_CASCADE_AGENTS.has(session.agentType)) {
       await reconcileNativeSession(deps, session, options);

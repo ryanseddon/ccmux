@@ -3,6 +3,7 @@ import { getDaemonUrl } from "../lib/config";
 import { daemonError, daemonBody } from "../lib/daemon-json";
 import { ensureDaemon } from "./shared";
 import type { EnrichedSession } from "../types";
+import { sessionRoute } from "../lib/session-route";
 
 interface ScreenResponse {
   content: string;
@@ -69,7 +70,7 @@ async function fetchScreen(
 ): Promise<ScreenResponse | null> {
   try {
     const response = await fetch(
-      `${daemonUrl}/sessions/${sessionId}/screen?lines=${lines}`,
+      `${daemonUrl}${sessionRoute(sessionId, "/screen")}?lines=${lines}`,
     );
     if (!response.ok) return null;
     return await daemonBody<ScreenResponse>(response, "screen");
@@ -84,7 +85,7 @@ async function handleSingleSession(
 ): Promise<void> {
   const lines = parseLines(options.lines);
   const response = await fetch(
-    `${getDaemonUrl()}/sessions/${sessionId}/screen?lines=${lines}`,
+    `${getDaemonUrl()}${sessionRoute(sessionId, "/screen")}?lines=${lines}`,
   );
 
   if (response.status === 404) {

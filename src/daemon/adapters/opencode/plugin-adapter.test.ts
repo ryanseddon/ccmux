@@ -10,6 +10,10 @@ const tempRoot = join(
 const opencodeConfigDir = join(tempRoot, "opencode");
 const opencodePluginDir = join(opencodeConfigDir, "plugin");
 const opencodePluginFile = join(opencodePluginDir, "ccmux.js");
+const opencodeV2PluginDir = join(opencodeConfigDir, "plugins");
+const opencodeV2PluginFile = join(opencodeV2PluginDir, "ccmux-v2.js");
+const opencodeCliConfigFile = join(opencodeConfigDir, "cli.json");
+const opencodeFocusDir = join(tempRoot, "focus");
 const markersDir = join(tempRoot, "markers");
 
 const actualConfig = await import("../../../lib/config");
@@ -18,6 +22,11 @@ mock.module("../../../lib/config", () => ({
   OPENCODE_CONFIG_DIR: opencodeConfigDir,
   OPENCODE_PLUGIN_DIR: opencodePluginDir,
   OPENCODE_PLUGIN_FILE: opencodePluginFile,
+  OPENCODE_V2_PLUGIN_DIR: opencodeV2PluginDir,
+  OPENCODE_V2_PLUGIN_FILE: opencodeV2PluginFile,
+  OPENCODE_V2_PLUGIN_CONFIG_PATH: "./plugins/ccmux-v2.js",
+  OPENCODE_CLI_CONFIG_FILE: opencodeCliConfigFile,
+  OPENCODE_FOCUS_DIR: opencodeFocusDir,
   MARKERS_DIR: markersDir,
 }));
 
@@ -27,6 +36,7 @@ import type { HookManagerContext } from "../../hook-adapter";
 import type { SessionPidMarker } from "../../session-markers";
 import { loadMarkerIntoCache, refreshMarkerCache } from "../../session-markers";
 import type { Session, TmuxPane } from "../../../types/session";
+import { SessionManager } from "../../sessions";
 
 const CCMUX_VERSION = pkg.version;
 
@@ -158,6 +168,42 @@ describe("OpenCodePluginAdapter", () => {
       expect(body).toContain(`markersDir: ${JSON.stringify(markersDir)}`);
       expect(body).toContain(`version: "${CCMUX_VERSION}"`);
     });
+
+    it("installs and registers the separate V2 plugin without losing config", async () => {
+      mkdirSync(opencodeConfigDir, { recursive: true });
+      writeFileSync(
+        opencodeCliConfigFile,
+        JSON.stringify({
+          theme: { name: "custom" },
+          plugins: ["./plugins/user.js"],
+        }),
+      );
+
+      await adapter.install();
+
+      expect(readFileSync(opencodeV2PluginFile, "utf8").split("\n")[0]).toBe(
+        `// ccmux-v2-plugin v${CCMUX_VERSION}`,
+      );
+      expect(JSON.parse(readFileSync(opencodeCliConfigFile, "utf8"))).toEqual({
+        theme: { name: "custom" },
+        plugins: ["./plugins/user.js", "./plugins/ccmux-v2.js"],
+      });
+    });
+
+    it("refuses to rewrite JSONC and does not install an unregistered V2 plugin", async () => {
+      mkdirSync(opencodeConfigDir, { recursive: true });
+      const jsonc = '{\n  // keep this comment\n  "plugins": []\n}\n';
+      writeFileSync(opencodeCliConfigFile, jsonc);
+
+      const outcome = await adapter.install();
+
+      expect(readFileSync(opencodeCliConfigFile, "utf8")).toBe(jsonc);
+      expect(existsSync(opencodeV2PluginFile)).toBe(false);
+      expect(
+        outcome.lines.some((line) => line.includes("not strict JSON")),
+      ).toBe(true);
+      expect(existsSync(opencodePluginFile)).toBe(true);
+    });
   });
 
   describe("uninstall", () => {
@@ -167,6 +213,10 @@ describe("OpenCodePluginAdapter", () => {
       const { lines } = await adapter.uninstall();
       expect(existsSync(opencodePluginFile)).toBe(false);
       expect(lines.some((l) => l.includes("Removed"))).toBe(true);
+      expect(existsSync(opencodeV2PluginFile)).toBe(false);
+      expect(
+        JSON.parse(readFileSync(opencodeCliConfigFile, "utf8")).plugins,
+      ).not.toContain("./plugins/ccmux-v2.js");
     });
 
     it("leaves a non-ccmux file alone and reports skip", async () => {
@@ -213,9 +263,12 @@ describe("OpenCodePluginAdapter", () => {
         `// ccmux-plugin v0.0.0-stale\n// body\n`,
       );
       const warnings = adapter.describeInstallAnomalies();
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain("v0.0.0-stale");
-      expect(warnings[0]).toContain(CCMUX_VERSION);
+      expect(warnings.some((warning) => warning.includes("v0.0.0-stale"))).toBe(
+        true,
+      );
+      expect(warnings.some((warning) => warning.includes(CCMUX_VERSION))).toBe(
+        true,
+      );
     });
 
     it("reports no anomaly for a foreign (non-ccmux) file", () => {
@@ -511,6 +564,114 @@ describe("OpenCodePluginAdapter", () => {
       writeMarkerToDisk(m);
       await adapter.onMarkerChanged(m, ctx);
       expect(session.state.status).toBeUndefined();
+    });
+  });
+
+  describe("V2 multiplexed marker sync", () => {
+    it("creates one exact-state row per UI marker and removes the synthetic pane row", async () => {
+      const pane = makePane("%10", 8100);
+      const sessions = new SessionManager();
+      const synthetic = sessions.createPaneTrackedSession({
+        agentType: "opencode",
+        paneId: pane.paneId,
+        cwd: "/fallback",
+        pid: 8100,
+      });
+      const ctx = makeCtx([], [pane]);
+      ctx.sessionManager = sessions;
+      writeMarkerToDisk(
+        makeMarker({
+          pid: 8100,
+          session_id: "ses-a",
+          ui_instance_id: "ui-1",
+          state: "waiting_question",
+          state_timestamp: 1_700_000_200,
+          directory: "/a",
+          title: "Alpha",
+          focused: true,
+        }),
+      );
+      writeMarkerToDisk(
+        makeMarker({
+          pid: 8100,
+          session_id: "ses-b",
+          ui_instance_id: "ui-1",
+          state: "working",
+          state_timestamp: 1_700_000_100,
+          directory: "/b",
+          title: "Beta",
+          focused: false,
+        }),
+      );
+
+      await adapter.syncMarkers(ctx);
+
+      expect(sessions.hasSession(synthetic.id)).toBe(false);
+      const rows = sessions.getSessions();
+      expect(rows).toHaveLength(2);
+      expect(rows.every((row) => row.trackingMode === "multiplexed")).toBe(
+        true,
+      );
+      const alpha = rows.find((row) => row.nativeSessionId === "ses-a")!;
+      expect(alpha).toMatchObject({
+        uiInstanceId: "ui-1",
+        title: "Alpha",
+        focused: true,
+        cwd: "/a",
+        status: "waiting",
+        attentionType: "question",
+        pendingTool: null,
+        tmuxPane: "%10",
+      });
+      const beta = rows.find((row) => row.nativeSessionId === "ses-b")!;
+      expect(beta.status).toBe("working");
+      expect(beta.attentionType).toBeNull();
+    });
+
+    it("per-scan sync heals missed add/remove events", async () => {
+      const pane = makePane("%11", 8200);
+      const sessions = new SessionManager();
+      const ctx = makeCtx([], [pane]);
+      ctx.sessionManager = sessions;
+      const marker = makeMarker({
+        pid: 8200,
+        session_id: "ses-tab",
+        ui_instance_id: "ui-2",
+        state: "idle",
+        directory: "/tab",
+      });
+      writeMarkerToDisk(marker);
+
+      await adapter.syncMarkers(ctx);
+      expect(sessions.getSessions()).toHaveLength(1);
+
+      rmSync(join(markersDir, "opencode-ses-tab.json"));
+      refreshMarkerCache();
+      await adapter.syncMarkers(ctx);
+      expect(sessions.getSessions()).toHaveLength(0);
+    });
+
+    it("preserves an existing exact row when pane lookup transiently misses", async () => {
+      const pane = makePane("%12", 8300);
+      const sessions = new SessionManager();
+      const ctx = makeCtx([], [pane]);
+      ctx.sessionManager = sessions;
+      writeMarkerToDisk(
+        makeMarker({
+          pid: 8300,
+          session_id: "ses-kept",
+          ui_instance_id: "ui-kept",
+          directory: "/kept",
+          focused: true,
+        }),
+      );
+
+      await adapter.syncMarkers(ctx);
+      const id = sessions.getSessions()[0]!.id;
+      ctx.getPaneHostingPid = async () => null;
+      await adapter.syncMarkers(ctx);
+
+      expect(sessions.getSession(id)).toBeDefined();
     });
   });
 });

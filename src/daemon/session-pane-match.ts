@@ -1,7 +1,11 @@
 import type { ProcessInfo, TmuxPane } from "../types/session";
 import { CLAUDE_AGENT_DEF } from "../lib/agents";
 import { ZOMBIE_STALE_MS } from "../lib/config";
-import { isBackgroundSession, type SessionManager } from "./sessions";
+import {
+  isBackgroundSession,
+  isMultiplexedOpenCodeSession,
+  type SessionManager,
+} from "./sessions";
 import type { ProcessTree } from "./process-tree";
 import {
   getSessionTimestampsIn,
@@ -39,14 +43,17 @@ export function matchSessionsToPanes(
 ): void {
   DaemonPerf.incFindIterations(panes.length + agentProcesses.length);
 
-  const sessions: SessionSlice[] = manager.getSessions().map((s) => ({
-    id: s.id,
-    agentType: s.agentType,
-    cwd: s.cwd,
-    tmuxPane: s.tmuxPane,
-    pid: s.pid,
-    isBackground: isBackgroundSession(s),
-  }));
+  const sessions: SessionSlice[] = manager
+    .getSessions()
+    .filter((s) => !isMultiplexedOpenCodeSession(s))
+    .map((s) => ({
+      id: s.id,
+      agentType: s.agentType,
+      cwd: s.cwd,
+      tmuxPane: s.tmuxPane,
+      pid: s.pid,
+      isBackground: isBackgroundSession(s),
+    }));
 
   const bindings: Binding[] = decideScanBindings({
     sessions,

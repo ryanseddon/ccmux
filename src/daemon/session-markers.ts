@@ -26,6 +26,10 @@ export interface SessionPidMarker {
   directory?: string;
   /** Session display title/slug. OpenCode only. */
   title?: string;
+  /** OpenCode V2 UI instance hosting this tab. Absent on V1 markers. */
+  ui_instance_id?: string;
+  /** Whether this tab is focused in its OpenCode V2 UI instance. */
+  focused?: boolean;
   /** Most recent user prompt, capped at 1KB. Cursor only. */
   last_prompt?: string;
 }
@@ -52,6 +56,10 @@ export function parseMarkerFile(content: string): SessionPidMarker | null {
 // --- In-memory marker cache (refreshed once per scan cycle) ---
 const markerCache = new Map<string, SessionPidMarker>();
 
+function markerIdentity(marker: SessionPidMarker): string {
+  return `${marker.agent_type}\0${marker.ui_instance_id ?? ""}\0${marker.session_id}`;
+}
+
 /**
  * Bulk-load all marker files into the in-memory cache.
  * Call once at the start of each scan cycle.
@@ -59,7 +67,7 @@ const markerCache = new Map<string, SessionPidMarker>();
 export function refreshMarkerCache(): void {
   markerCache.clear();
   for (const marker of getAllSessionPidMarkers()) {
-    markerCache.set(marker.session_id, marker);
+    markerCache.set(markerIdentity(marker), marker);
   }
 }
 
@@ -71,7 +79,7 @@ export function loadMarkerIntoCache(markerPath: string): void {
   try {
     const content = readFileSync(markerPath, "utf-8");
     const marker = parseMarkerFile(content);
-    if (marker) markerCache.set(marker.session_id, marker);
+    if (marker) markerCache.set(markerIdentity(marker), marker);
   } catch {
     // Skip malformed or unreadable files.
   }
@@ -85,7 +93,14 @@ export function getSessionPidMarker(
   sessionId: string,
 ): SessionPidMarker | null {
   DaemonPerf.incMarkerReads();
-  return markerCache.get(sessionId) ?? null;
+  const matches = [...markerCache.values()].filter(
+    (marker) => marker.session_id === sessionId,
+  );
+  return (
+    matches.find((marker) => marker.ui_instance_id === undefined) ??
+    matches[0] ??
+    null
+  );
 }
 
 /**
@@ -228,7 +243,7 @@ export function cleanupStaleMarkers(
         continue;
       }
 
-      const key = `${marker.agent_type}-${marker.session_id}`;
+      const key = markerIdentity(marker);
       const bucket = bySession.get(key);
       if (bucket) {
         bucket.push({ path: markerPath, marker });
@@ -266,7 +281,7 @@ export function cleanupStaleMarkers(
       // Only this check is hedged: the others read the marker's own contents,
       // which do not flicker.
       if (!activePids.has(marker.pid)) {
-        const reapKey = `${marker.agent_type}\0${marker.session_id}\0${marker.pid}`;
+        const reapKey = `${markerIdentity(marker)}\0${marker.pid}`;
         if (pendingPidReap.has(reapKey)) {
           tryUnlink(markerPath);
         } else {

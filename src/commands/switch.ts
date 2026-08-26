@@ -5,6 +5,7 @@ import { isSameTmuxServer } from "../lib/tmux-server";
 import { tmuxArgv } from "../lib/tmux-exec";
 import { resolveActiveTmuxClientTty } from "../lib/tmux-client";
 import { ensureDaemon } from "./shared";
+import { sessionRoute } from "../lib/session-route";
 
 export function createSwitchCommand(): Command {
   return new Command("switch")
@@ -14,7 +15,9 @@ export function createSwitchCommand(): Command {
       await ensureDaemon();
 
       try {
-        const response = await fetch(`${getDaemonUrl()}/sessions/${sessionId}`);
+        const response = await fetch(
+          `${getDaemonUrl()}${sessionRoute(sessionId)}`,
+        );
 
         if (response.status === 404) {
           console.error(`Session not found: ${sessionId}`);
@@ -58,6 +61,19 @@ export function createSwitchCommand(): Command {
           process.exit(1);
         }
 
+        const prepareResponse = await fetch(
+          `${getDaemonUrl()}${sessionRoute(sessionId, "/prepare-focus")}`,
+          { method: "POST" },
+        );
+        if (!prepareResponse.ok) {
+          const message = readString(
+            await prepareResponse.json().catch(() => null),
+            "error",
+          );
+          console.error(message ?? "Failed to focus the target agent session");
+          process.exit(1);
+        }
+
         // Outside tmux (e.g. a notification click from Notification Center)
         // there is no implicit current client for `switch-client` to act
         // on, so target the most-recently-active attached client
@@ -88,7 +104,7 @@ export function createSwitchCommand(): Command {
         }
 
         // Mark session as seen (fire-and-forget)
-        fetch(`${getDaemonUrl()}/sessions/${sessionId}/seen`, {
+        fetch(`${getDaemonUrl()}${sessionRoute(sessionId, "/seen")}`, {
           method: "POST",
         }).catch(() => {});
       } catch (error) {

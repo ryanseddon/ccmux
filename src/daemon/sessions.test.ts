@@ -651,6 +651,90 @@ describe("SessionManager", () => {
     expect(session?.logPath).toBe("/tmp/rollout-1.jsonl");
   });
 
+  it("keeps stable multiplexed rows for the same native session in two UI instances", () => {
+    const manager = new SessionManager();
+    const base = {
+      nativeSessionId: "ses_same",
+      paneId: "%8",
+      cwd: "/repo",
+      pid: 8000,
+      state: { status: "idle" as const },
+    };
+
+    const a = manager.createMultiplexedOpenCodeSession({
+      ...base,
+      uiInstanceId: "ui-a",
+      title: "Alpha",
+      focused: true,
+    });
+    const b = manager.createMultiplexedOpenCodeSession({
+      ...base,
+      uiInstanceId: "ui-b",
+      title: "Beta",
+      focused: false,
+    });
+
+    expect(a.id).not.toBe(b.id);
+    expect(manager.getSessions()).toHaveLength(2);
+    expect(a.trackingMode).toBe("multiplexed");
+    expect(a.uiInstanceId).toBe("ui-a");
+    expect(a.title).toBe("Alpha");
+    expect(a.focused).toBe(true);
+    expect(manager.getSessionByNativeSessionId("ses_same")).toBeUndefined();
+
+    const recreated = manager.createMultiplexedOpenCodeSession({
+      ...base,
+      uiInstanceId: "ui-a",
+      title: "Renamed",
+      focused: false,
+      state: { status: "working" },
+    });
+    expect(recreated.id).toBe(a.id);
+    expect(manager.getSessions()).toHaveLength(2);
+    expect(recreated.title).toBe("Renamed");
+    expect(recreated.focused).toBe(false);
+    expect(recreated.status).toBe("working");
+  });
+
+  it("emits one update when multiplexed marker and state fields change together", () => {
+    const manager = new SessionManager();
+    const input = {
+      uiInstanceId: "ui",
+      nativeSessionId: "tab",
+      paneId: "%8",
+      cwd: "/repo",
+      pid: 8000,
+      title: "Before",
+      focused: false,
+      state: { status: "idle" as const, lastPrompt: "first" },
+    };
+    manager.createMultiplexedOpenCodeSession(input);
+    const events: string[] = [];
+    manager.on("change", (event) => events.push(event.type));
+
+    const session = manager.createMultiplexedOpenCodeSession({
+      ...input,
+      title: "After",
+      focused: true,
+      state: {
+        status: "waiting",
+        attentionType: "question",
+        lastPrompt: "second",
+      },
+    });
+
+    expect(events).toEqual(["updated"]);
+    expect(session).toMatchObject({
+      title: "After",
+      focused: true,
+      status: "waiting",
+      attentionType: "question",
+      attentionGeneration: 1,
+      lastPrompt: "second",
+      prompts: ["first", "second"],
+    });
+  });
+
   describe("setTmuxPane soft-evict", () => {
     it("should soft-evict conflicting session instead of deleting it", () => {
       const manager = new SessionManager();
@@ -734,6 +818,25 @@ describe("SessionManager", () => {
   });
 
   describe("dedupe soft-evict", () => {
+    it("allows only multiplexed OpenCode siblings to share a pane", () => {
+      const manager = new SessionManager();
+      for (const uiInstanceId of ["ui-a", "ui-b"]) {
+        manager.createMultiplexedOpenCodeSession({
+          uiInstanceId,
+          nativeSessionId: `ses-${uiInstanceId}`,
+          paneId: "%8",
+          cwd: "/repo",
+          pid: 8000,
+          state: { status: "idle" },
+        });
+      }
+
+      expect(manager.dedupe()).toBe(0);
+      expect(
+        manager.getSessions().filter((s) => s.tmuxPane === "%8"),
+      ).toHaveLength(2);
+    });
+
     it("should soft-evict duplicate losers instead of deleting", () => {
       const manager = new SessionManager();
       manager.createSession(

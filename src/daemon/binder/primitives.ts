@@ -70,6 +70,7 @@ export function findSoftEvictTargets<
     agentType: string;
     cwd: string | null;
     tmuxPane: string | null;
+    trackingMode?: string;
   },
 >(sessions: Iterable<S>, claimant: S, paneId: string): S[] {
   const evicted: S[] = [];
@@ -77,7 +78,12 @@ export function findSoftEvictTargets<
     if (
       other.id !== claimant.id &&
       other.agentType === claimant.agentType &&
-      other.tmuxPane === paneId
+      other.tmuxPane === paneId &&
+      !(
+        claimant.agentType === "opencode" &&
+        claimant.trackingMode === "multiplexed" &&
+        other.trackingMode === "multiplexed"
+      )
     ) {
       evicted.push(other);
     }

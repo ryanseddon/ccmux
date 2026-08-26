@@ -29,6 +29,7 @@
  */
 
 import type { Session, TmuxPane } from "../types/session";
+import { findSessionForPane } from "./sessions";
 
 export type RefProximity = "same-window" | "same-session" | "global";
 
@@ -117,7 +118,7 @@ export function resolveSessionRef(
   }
 
   if (trimmed.startsWith("%")) {
-    const byPane = sessions.find((s) => s.tmuxPane === trimmed);
+    const byPane = findSessionForPane(sessions, trimmed);
     if (byPane) {
       return {
         outcome: "resolved",
@@ -136,7 +137,7 @@ export function resolveSessionRef(
     // facts below (which come from the same snapshot).
     const pane = [...panes.values()].find((p) => p.target === trimmed);
     if (pane) {
-      const byCoordinate = sessions.find((s) => s.tmuxPane === pane.paneId);
+      const byCoordinate = findSessionForPane(sessions, pane.paneId);
       if (byCoordinate) {
         return {
           outcome: "resolved",
@@ -153,7 +154,7 @@ export function resolveSessionRef(
   if (trimmed === "self") {
     const callerPane = ctx.callerPane?.trim();
     if (!callerPane) return { outcome: "not-found" };
-    const own = sessions.find((s) => s.tmuxPane === callerPane);
+    const own = findSessionForPane(sessions, callerPane);
     if (!own) return { outcome: "not-found" };
     return {
       outcome: "resolved",

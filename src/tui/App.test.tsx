@@ -18,6 +18,7 @@ import { MAX_TURNS, renderTurns } from "../daemon/transcript-read";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { EnrichedSession } from "../types";
 
 // Capture SSE callbacks so tests can fire events
 let sseCallbacks: SSECallbacks | null = null;
@@ -1173,6 +1174,36 @@ describe("App kill/restart dispatch routing", () => {
     await setup.renderOnce();
   }
 
+  it("does not offer keyboard kill or restart for a multiplexed tab", async () => {
+    const { calls, restore } = captureFetch();
+    try {
+      await renderApp(120, 20, { groupBy: "none" });
+      sseCallbacks!.onInit(
+        [
+          mockEnrichedSession({
+            id: "opencode:ui:tab",
+            trackingMode: "multiplexed",
+            focused: true,
+            tmuxPane: "%1",
+          }),
+        ],
+        null,
+      );
+      setup.mockInput.pressKey("j");
+      await setup.renderOnce();
+      setup.mockInput.pressKey("x");
+      setup.mockInput.pressKey("r");
+      await setup.renderOnce();
+      expect(
+        calls.some(
+          (call) => call.url.includes("/kill") || call.url.includes("/restart"),
+        ),
+      ).toBe(false);
+    } finally {
+      restore();
+    }
+  });
+
   it("kills a normal session via /sessions/:id/kill", async () => {
     const { calls, restore } = captureFetch();
     try {
@@ -1532,7 +1563,10 @@ describe("App kill/restart dispatch routing", () => {
 describe("App pane-switch feedback and server scoping", () => {
   // Override global fetch so daemonSocketPath is deterministic (a real fetch
   // could hit a live daemon). A getter lets a test flip the socket on reconnect.
-  function withServerInfo(socketPath: string | null | (() => string | null)) {
+  function withServerInfo(
+    socketPath: string | null | (() => string | null),
+    prepareStatus = 200,
+  ) {
     const get =
       typeof socketPath === "function" ? socketPath : () => socketPath;
     const original = globalThis.fetch;
@@ -1541,6 +1575,13 @@ describe("App pane-switch feedback and server scoping", () => {
         return {
           ok: true,
           json: async () => ({ socketPath: get() }),
+        } as Response;
+      }
+      if (String(url).includes("/prepare-focus")) {
+        return {
+          ok: prepareStatus >= 200 && prepareStatus < 300,
+          status: prepareStatus,
+          json: async () => ({ error: "Exact tab focus was not acknowledged" }),
         } as Response;
       }
       return { ok: true, json: async () => ({}) } as Response;
@@ -1567,9 +1608,15 @@ describe("App pane-switch feedback and server scoping", () => {
       tmuxPane: "%5",
     });
 
-  async function renderWithSession(props: Record<string, unknown> = {}) {
+  async function renderWithSession(
+    props: Record<string, unknown> = {},
+    sessionOverrides: Partial<EnrichedSession> = {},
+  ) {
     await renderApp(120, 20, { groupBy: "none", ...props });
-    sseCallbacks!.onInit([oneSession()], null);
+    sseCallbacks!.onInit(
+      [{ ...oneSession(), ...sessionOverrides } as EnrichedSession],
+      null,
+    );
     await setup.renderOnce();
   }
 
@@ -1604,6 +1651,24 @@ describe("App pane-switch feedback and server scoping", () => {
       await renderWithSession();
       await selectFirstRowAndEnter();
       expect(exitSpy).toHaveBeenCalledWith(0);
+    } finally {
+      restoreExit();
+      restoreFetch();
+    }
+  });
+
+  it("does not switch panes when exact session focus is refused", async () => {
+    const restoreFetch = withServerInfo(null, 409);
+    const { exitSpy, restore: restoreExit } = withExitSpy();
+    try {
+      await renderWithSession(
+        {},
+        { trackingMode: "multiplexed", focused: false },
+      );
+      await selectFirstRowAndEnter();
+      expect(setup.captureCharFrame()).toContain("Exact tab focus");
+      expect(switchToPaneSpy).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
     } finally {
       restoreExit();
       restoreFetch();
@@ -7392,9 +7457,7 @@ describe("App worktrees panel (W)", () => {
             }
           : url.includes("/prs")
             ? {
-                repos: [
-                  { repoRoot: "/code/myapp", repoName: "myapp", prs },
-                ],
+                repos: [{ repoRoot: "/code/myapp", repoName: "myapp", prs }],
                 errors: [],
               }
             : {};

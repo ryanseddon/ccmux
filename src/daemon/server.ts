@@ -87,9 +87,13 @@ import { listSpawnableAgents, spawnBinaryFor } from "../lib/spawnable-agents";
 import {
   getMarkerKey,
   isBackgroundSession,
+  findSessionForPane,
+  isMultiplexedOpenCodeSession,
   type SessionManager,
   type SessionEvent,
 } from "./sessions";
+import { requestOpenCodeFocus } from "./opencode-focus";
+import { decodeSessionRouteSegment } from "../lib/session-route";
 import type {
   SSEEvent,
   FinishedInvocationStatus,
@@ -150,6 +154,14 @@ import type {
   NotificationActionInput,
   NotificationActionResult,
 } from "./notification-action";
+
+function sessionIdFromPath(path: string, suffix = ""): string | null {
+  const raw = path.slice(
+    "/sessions/".length,
+    suffix ? -suffix.length : undefined,
+  );
+  return decodeSessionRouteSegment(raw);
+}
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -605,6 +617,7 @@ export class DaemonServer {
   private paneSendDeps: PaneSendDeps;
   private runNotificationAction: NotificationActionRunner | null;
   private retractNotification: NotificationRetractFn | null;
+  private requestOpenCodeFocus = requestOpenCodeFocus;
   /** Reads the daemon's live scan-health snapshot. Follows the getPaneCache /
    *  getAgentByType accessor pattern so the server never imports daemon state. */
   private getScanHealth: () => DaemonHealth;
@@ -1065,7 +1078,7 @@ export class DaemonServer {
     if (session) return session;
 
     // Fall back to pane ID lookup
-    return this.sessionManager.getSessions().find((s) => s.tmuxPane === id);
+    return findSessionForPane(this.sessionManager.getSessions(), id);
   }
 
   /**
@@ -1248,7 +1261,13 @@ export class DaemonServer {
       path.endsWith("/screen") &&
       req.method === "GET"
     ) {
-      const sessionId = path.slice("/sessions/".length, -"/screen".length);
+      const sessionId = sessionIdFromPath(path, "/screen");
+      if (sessionId === null) {
+        return Response.json(
+          { error: "Invalid session ID" },
+          { status: 400, headers: corsHeaders },
+        );
+      }
       return await this.handleScreenSession(sessionId, url, corsHeaders);
     }
 
@@ -1257,15 +1276,12 @@ export class DaemonServer {
       path.endsWith("/transcript") &&
       req.method === "GET"
     ) {
-      const raw = path.slice("/sessions/".length, -"/transcript".length);
-      // A malformed escape (`%zz`) throws URIError, which would escape
-      // `handleRequest` as a 500 carrying Bun's HTML error page. The raw
-      // segment is a fine ref to try instead: it resolves or 404s.
-      let ref: string;
-      try {
-        ref = decodeURIComponent(raw);
-      } catch {
-        ref = raw;
+      const ref = sessionIdFromPath(path, "/transcript");
+      if (ref === null) {
+        return Response.json(
+          { error: "Invalid session ID" },
+          { status: 400, headers: corsHeaders },
+        );
       }
       return await this.handleSessionTranscript(ref, url, corsHeaders);
     }
@@ -1279,12 +1295,24 @@ export class DaemonServer {
       path.endsWith("/dirty") &&
       req.method === "GET"
     ) {
-      const sessionId = path.slice("/sessions/".length, -"/dirty".length);
+      const sessionId = sessionIdFromPath(path, "/dirty");
+      if (sessionId === null) {
+        return Response.json(
+          { error: "Invalid session ID" },
+          { status: 400, headers: corsHeaders },
+        );
+      }
       return await this.handleSessionDirty(sessionId, url, corsHeaders);
     }
 
     if (path.startsWith("/sessions/") && req.method === "GET") {
-      const sessionId = path.slice("/sessions/".length);
+      const sessionId = sessionIdFromPath(path);
+      if (sessionId === null) {
+        return Response.json(
+          { error: "Invalid session ID" },
+          { status: 400, headers: corsHeaders },
+        );
+      }
       return await this.handleGetSession(sessionId, corsHeaders);
     }
 
@@ -1294,10 +1322,31 @@ export class DaemonServer {
 
     if (
       path.startsWith("/sessions/") &&
+      path.endsWith("/prepare-focus") &&
+      req.method === "POST"
+    ) {
+      const sessionId = sessionIdFromPath(path, "/prepare-focus");
+      if (sessionId === null) {
+        return Response.json(
+          { error: "Invalid session ID" },
+          { status: 400, headers: corsHeaders },
+        );
+      }
+      return await this.handlePrepareFocus(sessionId, corsHeaders);
+    }
+
+    if (
+      path.startsWith("/sessions/") &&
       path.endsWith("/send") &&
       req.method === "POST"
     ) {
-      const sessionId = path.slice("/sessions/".length, -"/send".length);
+      const sessionId = sessionIdFromPath(path, "/send");
+      if (sessionId === null) {
+        return Response.json(
+          { error: "Invalid session ID" },
+          { status: 400, headers: corsHeaders },
+        );
+      }
       return await this.handleSendToSession(sessionId, req, corsHeaders);
     }
 
@@ -1306,7 +1355,13 @@ export class DaemonServer {
       path.endsWith("/restart") &&
       req.method === "POST"
     ) {
-      const sessionId = path.slice("/sessions/".length, -"/restart".length);
+      const sessionId = sessionIdFromPath(path, "/restart");
+      if (sessionId === null) {
+        return Response.json(
+          { error: "Invalid session ID" },
+          { status: 400, headers: corsHeaders },
+        );
+      }
       return await this.handleRestartSession(sessionId, corsHeaders);
     }
 
@@ -1315,7 +1370,13 @@ export class DaemonServer {
       path.endsWith("/kill") &&
       req.method === "POST"
     ) {
-      const sessionId = path.slice("/sessions/".length, -"/kill".length);
+      const sessionId = sessionIdFromPath(path, "/kill");
+      if (sessionId === null) {
+        return Response.json(
+          { error: "Invalid session ID" },
+          { status: 400, headers: corsHeaders },
+        );
+      }
       return await this.handleKillSession(sessionId, corsHeaders);
     }
 
@@ -1324,12 +1385,24 @@ export class DaemonServer {
       path.endsWith("/seen") &&
       req.method === "POST"
     ) {
-      const sessionId = path.slice("/sessions/".length, -"/seen".length);
+      const sessionId = sessionIdFromPath(path, "/seen");
+      if (sessionId === null) {
+        return Response.json(
+          { error: "Invalid session ID" },
+          { status: 400, headers: corsHeaders },
+        );
+      }
       return this.handleMarkSeen(sessionId, corsHeaders);
     }
 
     if (path.startsWith("/sessions/") && req.method === "DELETE") {
-      const sessionId = path.slice("/sessions/".length);
+      const sessionId = sessionIdFromPath(path);
+      if (sessionId === null) {
+        return Response.json(
+          { error: "Invalid session ID" },
+          { status: 400, headers: corsHeaders },
+        );
+      }
       return this.handleDeleteSession(sessionId, corsHeaders);
     }
 
@@ -2029,7 +2102,7 @@ export class DaemonServer {
     sessionId: string,
     headers: Record<string, string>,
   ): Promise<Response> {
-    const session = this.sessionManager.getSession(sessionId);
+    const session = this.resolveSession(sessionId);
 
     if (!session) {
       return Response.json(
@@ -2058,6 +2131,41 @@ export class DaemonServer {
     this.attentionTracker.markSeen(sessionId);
     this.sessionManager.markSeen(sessionId);
     return Response.json({ success: true }, { headers });
+  }
+
+  private async handlePrepareFocus(
+    sessionId: string,
+    headers: Record<string, string>,
+  ): Promise<Response> {
+    const session = this.resolveSession(sessionId);
+    if (!session) {
+      return Response.json(
+        { error: "Session not found" },
+        { status: 404, headers },
+      );
+    }
+    const error = await this.prepareSessionFocus(session);
+    if (error) {
+      return Response.json({ error }, { status: 409, headers });
+    }
+    return Response.json(
+      { success: true, prepared: isMultiplexedOpenCodeSession(session) },
+      { headers },
+    );
+  }
+
+  private async prepareSessionFocus(session: Session): Promise<string | null> {
+    if (!isMultiplexedOpenCodeSession(session)) return null;
+    if (!session.uiInstanceId || !session.nativeSessionId) {
+      return "Multiplexed OpenCode session has no exact focus target";
+    }
+    const focused = await this.requestOpenCodeFocus({
+      uiInstanceId: session.uiInstanceId,
+      sessionId: session.nativeSessionId,
+    });
+    return focused
+      ? null
+      : "OpenCode did not acknowledge the exact tab focus request";
   }
 
   /**
@@ -2374,6 +2482,16 @@ export class DaemonServer {
       );
     }
 
+    if (isMultiplexedOpenCodeSession(session)) {
+      return Response.json(
+        {
+          error:
+            "Cannot kill one OpenCode tab: its process is shared with other tabs",
+        },
+        { status: 409, headers },
+      );
+    }
+
     // Background rows' worker pid is owned by Claude's supervisor, never by
     // ccmux, so a direct SIGTERM is unsafe. If the agent defines a stop
     // command, shell out to it and let the supervisor tear the worker down;
@@ -2507,6 +2625,16 @@ export class DaemonServer {
       return Response.json(
         { error: "Session not found" },
         { status: 404, headers },
+      );
+    }
+
+    if (isMultiplexedOpenCodeSession(session)) {
+      return Response.json(
+        {
+          error:
+            "Cannot restart one OpenCode tab: its process is shared with other tabs",
+        },
+        { status: 409, headers },
       );
     }
 
@@ -2739,6 +2867,11 @@ export class DaemonServer {
     // window renumber within the scan interval and would inject text into the
     // wrong pane. `%N` is immutable for the pane's life.
     const target = session.tmuxPane;
+
+    const focusError = await this.prepareSessionFocus(session);
+    if (focusError) {
+      return Response.json({ error: focusError }, { status: 409, headers });
+    }
 
     const sent = usesPastePath
       ? await this.paneSendDeps.sendPromptToPane(target, text, enter)
@@ -3539,6 +3672,16 @@ export class DaemonServer {
       }
     }
 
+    const focusError = await this.prepareSessionFocus(current);
+    if (focusError) {
+      return {
+        ok: false,
+        code: 409,
+        reason: "focus-failed",
+        error: focusError,
+      };
+    }
+
     const sent = await this.paneSendDeps.sendPromptToPane(
       target.tmuxPane,
       defuseLeadingTrigger(text),
@@ -3608,7 +3751,8 @@ export class DaemonServer {
     } else if (
       result.reason === "send-failed" ||
       result.reason === "target-busy" ||
-      result.reason === "pane-not-ready"
+      result.reason === "pane-not-ready" ||
+      result.reason === "focus-failed"
     ) {
       const attempts = (record.attempts ?? 0) + 1;
       const requeued =

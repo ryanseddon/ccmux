@@ -96,6 +96,47 @@ function fixture() {
 }
 
 describe("resolveSessionRef exact tiers", () => {
+  it("prefers the focused multiplexed row for every pane-based exact ref", () => {
+    const ctx = fixture();
+    ctx.sessions = [
+      mkSession({
+        id: "hidden",
+        agentType: "opencode",
+        trackingMode: "multiplexed",
+        tmuxPane: "%1",
+        focused: false,
+      }),
+      mkSession({
+        id: "focused",
+        agentType: "opencode",
+        trackingMode: "multiplexed",
+        tmuxPane: "%1",
+        focused: true,
+      }),
+    ];
+
+    for (const ref of ["%1", "work:1.0", "self"]) {
+      const result = resolveSessionRef(ref, ctx);
+      expect(result.outcome === "resolved" && result.session.id).toBe(
+        "focused",
+      );
+    }
+  });
+
+  it("refuses to guess when a pane has only several unfocused tabs", () => {
+    const ctx = fixture();
+    ctx.sessions = ["a", "b"].map((id) =>
+      mkSession({
+        id,
+        agentType: "opencode",
+        trackingMode: "multiplexed",
+        tmuxPane: "%1",
+        focused: false,
+      }),
+    );
+    expect(resolveSessionRef("%1", ctx)).toEqual({ outcome: "not-found" });
+  });
+
   it("resolves a session id", () => {
     const r = resolveSessionRef("codex-ccc", fixture());
     expect(r).toMatchObject({

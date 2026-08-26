@@ -1,4 +1,5 @@
 import type { EnrichedSession } from "../../types";
+import { sessionRoute } from "../../lib/session-route";
 
 /**
  * The daemon endpoint path for the "kill" action on a row.
@@ -19,7 +20,7 @@ export function killActionPath(
 ): string {
   return session.originInvocationId
     ? `/invoke/${session.originInvocationId}/cancel`
-    : `/sessions/${session.id}/kill`;
+    : sessionRoute(session.id, "/kill");
 }
 
 /**
@@ -32,5 +33,5 @@ export function restartActionPath(
 ): string {
   return session.originInvocationId
     ? `/invoke/${session.originInvocationId}/cancel`
-    : `/sessions/${session.id}/restart`;
+    : sessionRoute(session.id, "/restart");
 }

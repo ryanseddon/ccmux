@@ -7,6 +7,7 @@
 
 import { Command } from "commander";
 import { getDaemonUrl } from "../lib/config";
+import { sessionRoute } from "../lib/session-route";
 import { daemonError, daemonBody } from "../lib/daemon-json";
 import { ensureDaemon } from "./shared";
 import { proximityLabel } from "../daemon/session-ref";
@@ -107,7 +108,7 @@ export function createLastCommand(): Command {
       let response: Response;
       try {
         response = await fetch(
-          `${getDaemonUrl()}/sessions/${encodeURIComponent(ref)}/transcript?${params}`,
+          `${getDaemonUrl()}${sessionRoute(ref, "/transcript")}?${params}`,
         );
       } catch (error) {
         console.error("Failed to reach the daemon:", error);

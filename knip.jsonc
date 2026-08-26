@@ -2,18 +2,19 @@
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "entry": [
     // OpenCode loads via dynamic import at runtime; not reachable from src/index.ts.
-    "src/plugins/opencode/plugin.js"
+    "src/plugins/opencode/plugin.js",
+    "src/plugins/opencode/v2-plugin.js",
   ],
   "project": ["src/**/*.{ts,tsx,js}"],
   "ignoreDependencies": [
     // Editor-only formatter; no scripted/CI usage.
     "prettier",
     // Provided by the OpenCode runtime that loads our plugin.
-    "@opencode-ai/plugin"
+    "@opencode-ai/plugin",
   ],
   "ignoreExportsUsedInFile": true,
   "ignore": [
     // launchTUI is reached only via dynamic import("../tui") from commands/{picker,sidebar}.ts.
-    "src/tui/index.tsx"
-  ]
+    "src/tui/index.tsx",
+  ],
 }

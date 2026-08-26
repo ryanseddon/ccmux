@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { getDaemonUrl } from "../lib/config";
 import { ensureDaemon } from "./shared";
+import { sessionRoute } from "../lib/session-route";
 
 export function createDismissCommand(): Command {
   return new Command("dismiss")
@@ -11,7 +12,7 @@ export function createDismissCommand(): Command {
 
       try {
         const response = await fetch(
-          `${getDaemonUrl()}/sessions/${sessionId}`,
+          `${getDaemonUrl()}${sessionRoute(sessionId)}`,
           {
             method: "DELETE",
           },

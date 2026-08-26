@@ -4075,6 +4075,36 @@ describe("reconcileOne (marker-event path)", () => {
     expect(updated.attentionType).toBe("permission");
     expect(updated.pendingTool).toBe("external_directory");
   });
+
+  it("multiplexed OpenCode rows are marker-authoritative and never capture the pane", async () => {
+    const session = sessionManager.createMultiplexedOpenCodeSession({
+      uiInstanceId: "ui-1",
+      nativeSessionId: "ses-tab",
+      paneId: "%4",
+      cwd: "/x",
+      pid: 4567,
+      state: {
+        status: "waiting",
+        attentionType: "question",
+        pendingTool: null,
+      },
+    });
+    mockCapturePane = async () => {
+      throw new Error("multiplexed rows must not capture terminal output");
+    };
+
+    await reconcileOne(
+      buildDeps(null),
+      session,
+      new Map([["%4", fakePane({ paneId: "%4" })]]),
+    );
+
+    expect(sessionManager.getSession(session.id)).toMatchObject({
+      status: "waiting",
+      attentionType: "question",
+      pendingTool: null,
+    });
+  });
 });
 
 describe("capStaleSubagents", () => {

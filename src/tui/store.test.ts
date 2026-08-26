@@ -1333,6 +1333,18 @@ describe("store", () => {
       expect(filtered[0].session.id).toBe("s1");
     });
 
+    it("should match an OpenCode tab title", () => {
+      const store = createTUIStore({ groupBy: "none" });
+      store.actions.setSessions([
+        createMockSession({ id: "s1", project: "same", title: "API cleanup" }),
+        createMockSession({ id: "s2", project: "same", title: "UI polish" }),
+      ]);
+      store.actions.setSearchQuery("cleanup");
+      expect(store.filteredSessions().map((row) => row.session.id)).toEqual([
+        "s1",
+      ]);
+    });
+
     it("should match on gitBranch", () => {
       const store = createTUIStore({ groupBy: "none" });
       store.actions.setSessions([
@@ -1583,6 +1595,22 @@ describe("store", () => {
       await waitForDebounce();
 
       expect(capturePaneSpy).toHaveBeenCalledWith("%1", 100);
+    });
+
+    it("does not capture an unfocused multiplexed tab for pane search", async () => {
+      capturePaneSpy.mockClear();
+      const store = createTUIStore({ groupBy: "none" });
+      store.actions.setSessions([
+        createMockSession({
+          id: "hidden",
+          trackingMode: "multiplexed",
+          focused: false,
+          tmuxPane: "%1",
+        }),
+      ]);
+      store.actions.setSearchQuery("pane-only-text");
+      await waitForDebounce();
+      expect(capturePaneSpy).not.toHaveBeenCalled();
     });
 
     it("reuses cached pane content for a second query within the TTL (issue #55 item 5)", async () => {

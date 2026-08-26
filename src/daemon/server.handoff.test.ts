@@ -54,6 +54,10 @@ type Internals = {
   >;
   visibleSessions: Set<string>;
   handoffQueue: HandoffQueue;
+  requestOpenCodeFocus(input: {
+    uiInstanceId: string;
+    sessionId: string;
+  }): Promise<boolean>;
 };
 
 /** A literal ESC byte, spelled without an escape sequence so it survives any
@@ -295,6 +299,34 @@ describe("POST /handoff — composition", () => {
     expect(lines[1]).toBe("note: over to you");
     expect(lines[2]).toBe("");
     expect(lines[3]).toBe("ship it");
+  });
+
+  it("fails closed before immediate delivery when exact tab focus is not acknowledged", async () => {
+    const { manager, internals, sendPromptToPane, getPaneCommand } =
+      createServer();
+    manager.createSession("src", transcript("src.jsonl", "ship it"));
+    manager.setTmuxPane("src", "%1");
+    const target = manager.createMultiplexedOpenCodeSession({
+      uiInstanceId: "ui",
+      nativeSessionId: "tab",
+      paneId: "%2",
+      cwd: "/repo",
+      pid: 22,
+      focused: false,
+      state: { status: "idle" },
+    });
+    getPaneCommand.mockResolvedValue("opencode");
+    const focus = mock(async () => false);
+    internals.requestOpenCodeFocus = focus;
+
+    const response = await post(internals, { from: "src", to: target.id });
+
+    expect(response.status).toBe(409);
+    expect(focus).toHaveBeenCalledWith({
+      uiInstanceId: "ui",
+      sessionId: "tab",
+    });
+    expect(sendPromptToPane).not.toHaveBeenCalled();
   });
 
   it("keeps a one-turn payload bare, with no role labels", async () => {
@@ -852,6 +884,36 @@ describe("POST /handoff — queue on busy", () => {
       fromSessionId: "src",
       queuedAt: data.queuedAt,
     });
+  });
+
+  it("re-queues without pane input when queued delivery cannot focus the exact tab", async () => {
+    const { manager, internals, sendPromptToPane, getPaneCommand } =
+      createServer();
+    manager.createSession("src", transcript("src.jsonl", "queued tab"));
+    manager.setTmuxPane("src", "%1");
+    const target = manager.createMultiplexedOpenCodeSession({
+      uiInstanceId: "ui",
+      nativeSessionId: "tab",
+      paneId: "%2",
+      cwd: "/repo",
+      pid: 22,
+      focused: false,
+      state: { status: "working" },
+    });
+    getPaneCommand.mockResolvedValue("opencode");
+    const focus = mock(async () => false);
+    internals.requestOpenCodeFocus = focus;
+    const queued = await post(internals, { from: "src", to: target.id });
+    expect((await queued.json()) as { status: string }).toMatchObject({
+      status: "queued",
+    });
+
+    manager.updateSession(target.id, { status: "idle" });
+    await Bun.sleep(20);
+
+    expect(focus).toHaveBeenCalledTimes(1);
+    expect(sendPromptToPane).not.toHaveBeenCalled();
+    expect(internals.handoffQueue.peek(target.id)?.attempts).toBe(1);
   });
 
   it("queues the text already composed, turns and note included", async () => {

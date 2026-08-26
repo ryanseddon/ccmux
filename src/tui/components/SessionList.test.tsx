@@ -379,4 +379,19 @@ describe("isActivePaneRow", () => {
     expect(isActivePaneRow({ tmuxPane: "%1" }, "%2")).toBe(false);
     expect(isActivePaneRow({ tmuxPane: "%1" }, null)).toBe(false);
   });
+
+  it("marks only a focused multiplexed row active", () => {
+    expect(
+      isActivePaneRow(
+        { tmuxPane: "%1", trackingMode: "multiplexed", focused: false },
+        "%1",
+      ),
+    ).toBe(false);
+    expect(
+      isActivePaneRow(
+        { tmuxPane: "%1", trackingMode: "multiplexed", focused: true },
+        "%1",
+      ),
+    ).toBe(true);
+  });
 });

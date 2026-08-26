@@ -199,6 +199,33 @@ describe("Daemon no-hooks Claude sessions", () => {
     ).toBe("native-codex");
   });
 
+  it("does not flap a synthetic OpenCode row when a multiplexed row already occupies the pane", async () => {
+    internals.claudeRuntimeMode = "claude-no-hooks";
+    internals.sessionManager.createMultiplexedOpenCodeSession({
+      uiInstanceId: "marker-pid-9000",
+      nativeSessionId: "tab",
+      paneId: "%4",
+      cwd: "/Users/test/proj",
+      pid: 9000,
+      focused: true,
+      state: { status: "idle" },
+    });
+    let resolveCalls = 0;
+    internals.resolveNativeSessionId = async () => {
+      resolveCalls += 1;
+      return undefined;
+    };
+
+    await internals.createOrUpdatePaneTrackedSessions(
+      [fakeProcess("opencode", "opencode-wrapper", 9001, "ttys004", "/Users/test/proj")],
+      [fakePane("%4", "/dev/ttys004", "/Users/test/proj")],
+    );
+
+    expect(internals.sessionManager.getSession("opencode_pane4")).toBeUndefined();
+    expect(internals.sessionManager.getSessions()).toHaveLength(1);
+    expect(resolveCalls).toBe(0);
+  });
+
   it("derives state from pane inspection in no-hooks mode", async () => {
     internals.claudeRuntimeMode = "claude-no-hooks";
 

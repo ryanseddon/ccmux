@@ -378,7 +378,7 @@ describe("GET /sessions/:ref/transcript", () => {
 });
 
 describe("the transcript route's ref decode", () => {
-  it("answers a malformed percent-escape with the normal JSON 404", async () => {
+  it("rejects a malformed percent-escape without throwing", async () => {
     const { internals } = createServer();
 
     const response = await internals.handleRequest(
@@ -386,9 +386,28 @@ describe("the transcript route's ref decode", () => {
     );
     // Not a 500: an unguarded decodeURIComponent throws URIError past the
     // dispatcher, and Bun answers that with an HTML page naming source paths.
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(400);
     expect(response.headers.get("content-type")).toContain("application/json");
+    expect(await response.json()).toEqual({ error: "Invalid session ID" });
+  });
+
+  it("treats an encoded slash as one session ref", async () => {
+    const { internals } = createServer();
+    const response = await internals.handleRequest(
+      new Request("http://localhost/sessions/a%2Fb/transcript"),
+    );
+
+    expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ error: "Session not found" });
+  });
+
+  it("rejects a raw multi-segment session ref", async () => {
+    const { internals } = createServer();
+    const response = await internals.handleRequest(
+      new Request("http://localhost/sessions/a/b/transcript"),
+    );
+
+    expect(response.status).toBe(400);
   });
 
   it("decodes a percent-encoded pane ref on the way to the handler", async () => {

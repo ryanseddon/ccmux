@@ -24,6 +24,17 @@ interface PaneTrackedSessionInput {
   nativeSessionId?: string;
 }
 
+interface MultiplexedOpenCodeSessionInput {
+  uiInstanceId: string;
+  nativeSessionId: string;
+  paneId: string;
+  cwd: string;
+  pid: number;
+  title?: string;
+  focused?: boolean;
+  state: Partial<SessionState>;
+}
+
 /**
  * Derive a pane-tracked session's stable id from its pane + agent type.
  * `createPaneTrackedSession` uses this to find/create the row. Kept
@@ -119,6 +130,33 @@ export function isPaneTrackedClaudeSession(session: Session): boolean {
 
 export function isBackgroundSession(session: Session): boolean {
   return session.trackingMode === "background";
+}
+
+export function isMultiplexedOpenCodeSession(session: Session): boolean {
+  return (
+    session.agentType === "opencode" && session.trackingMode === "multiplexed"
+  );
+}
+
+export function findSessionForPane(
+  sessions: Session[],
+  paneId: string,
+): Session | undefined {
+  const matches = sessions.filter((session) => session.tmuxPane === paneId);
+  return (
+    matches.find(
+      (session) =>
+        isMultiplexedOpenCodeSession(session) && session.focused === true,
+    ) ??
+    matches.find((session) => !isMultiplexedOpenCodeSession(session))
+  );
+}
+
+export function deriveMultiplexedOpenCodeSessionId(
+  uiInstanceId: string,
+  nativeSessionId: string,
+): string {
+  return `opencode:${encodeURIComponent(uiInstanceId)}:${encodeURIComponent(nativeSessionId)}`;
 }
 
 /**
@@ -447,6 +485,88 @@ export class SessionManager extends EventEmitter {
     return session;
   }
 
+  /** Create or refresh one OpenCode V2 tab from its exact marker state. */
+  createMultiplexedOpenCodeSession(
+    input: MultiplexedOpenCodeSessionInput,
+  ): Session {
+    const id = deriveMultiplexedOpenCodeSessionId(
+      input.uiInstanceId,
+      input.nativeSessionId,
+    );
+    const existing = this.sessions.get(id);
+    if (existing) {
+      let changed = false;
+      const project = deriveProject(input.cwd, "opencode");
+      if (existing.cwd !== input.cwd) {
+        existing.cwd = input.cwd;
+        existing.project = project;
+        changed = true;
+      }
+      if (existing.tmuxPane !== input.paneId) {
+        existing.tmuxPane = input.paneId;
+        changed = true;
+      }
+      if (existing.pid !== input.pid) {
+        existing.pid = input.pid;
+        changed = true;
+      }
+      if (existing.title !== input.title) {
+        existing.title = input.title;
+        changed = true;
+      }
+      if (existing.focused !== input.focused) {
+        existing.focused = input.focused;
+        changed = true;
+      }
+      if (changed) {
+        existing.updatedAt = new Date();
+      }
+      const stateChanged = this.applySessionUpdate(id, input.state, false);
+      if (changed || stateChanged) {
+        this.emit("change", {
+          type: "updated",
+          session: existing,
+        } as SessionEvent);
+      }
+      return existing;
+    }
+
+    const session: Session = {
+      id,
+      agentType: "opencode",
+      trackingMode: "multiplexed",
+      nativeSessionId: input.nativeSessionId,
+      uiInstanceId: input.uiInstanceId,
+      title: input.title,
+      focused: input.focused,
+      project: deriveProject(input.cwd, "opencode"),
+      cwd: input.cwd,
+      logPath: null,
+      status: input.state.status ?? "idle",
+      attentionType: input.state.attentionType ?? null,
+      pendingTool: input.state.pendingTool ?? null,
+      inPlanMode: false,
+      tmuxPane: input.paneId,
+      updatedAt: new Date(),
+      lastActivityAt: input.state.lastActivityAt ?? null,
+      lastUserInputAt: null,
+      subagents: [],
+      gitBranch: null,
+      version: null,
+      pid: input.pid,
+      statusChangedAt: null,
+      attentionGeneration: 0,
+      previousStatus: null,
+      attentionState: null,
+      lastSeenAt: null,
+      lastPrompt: input.state.lastPrompt ?? null,
+      prompts: input.state.lastPrompt ? [input.state.lastPrompt] : [],
+    };
+    this.sessions.set(id, session);
+    this.emit("change", { type: "created", session } as SessionEvent);
+    return session;
+  }
+
   /**
    * Create a Claude background (background-agent) session. Paneless by
    * nature: `tmuxPane` is always null. Keyed by `daemonShort`. The
@@ -499,6 +619,14 @@ export class SessionManager extends EventEmitter {
    * Update a session with new state
    */
   updateSession(sessionId: string, state: Partial<SessionState>): boolean {
+    return this.applySessionUpdate(sessionId, state, true);
+  }
+
+  private applySessionUpdate(
+    sessionId: string,
+    state: Partial<SessionState>,
+    emitChange: boolean,
+  ): boolean {
     const session = this.sessions.get(sessionId);
     if (!session) return false;
 
@@ -693,7 +821,9 @@ export class SessionManager extends EventEmitter {
 
     if (changed) {
       session.updatedAt = new Date();
-      this.emit("change", { type: "updated", session } as SessionEvent);
+      if (emitChange) {
+        this.emit("change", { type: "updated", session } as SessionEvent);
+      }
     }
 
     return changed;
@@ -1046,6 +1176,7 @@ export class SessionManager extends EventEmitter {
 
     for (const session of this.sessions.values()) {
       if (session.tmuxPane === null) continue;
+      if (isMultiplexedOpenCodeSession(session)) continue;
       const key = `${session.agentType}|${session.cwd}|${session.tmuxPane}`;
       const group = groups.get(key) || [];
       group.push(session);

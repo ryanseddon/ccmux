@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { getDaemonUrl } from "../lib/config";
 import { daemonError, readBoolean } from "../lib/daemon-json";
 import { ensureDaemon } from "./shared";
+import { sessionRoute } from "../lib/session-route";
 
 export function createKillCommand(): Command {
   return new Command("kill")
@@ -12,7 +13,7 @@ export function createKillCommand(): Command {
 
       try {
         const response = await fetch(
-          `${getDaemonUrl()}/sessions/${sessionId}/kill`,
+          `${getDaemonUrl()}${sessionRoute(sessionId, "/kill")}`,
           { method: "POST" },
         );
 
@@ -21,7 +22,7 @@ export function createKillCommand(): Command {
           process.exit(1);
         }
 
-        if (response.status === 400) {
+        if (response.status === 400 || response.status === 409) {
           const error = await daemonError(response);
           console.error(error ?? `HTTP ${response.status}`);
           process.exit(1);

@@ -247,6 +247,11 @@ export const Preview: Component<PreviewProps> = (props) => {
     | typeof CAPTURE_FAILED
     | typeof CROSS_SERVER
     | null = null;
+  const hiddenMultiplexed = () =>
+    props.session?.trackingMode === "multiplexed" &&
+    props.session.focused !== true;
+  const hiddenPlaceholder = () =>
+    `OpenCode tab: ${props.session?.title ?? props.session?.nativeSessionId ?? "unfocused"}\nFocus this tab to view pane content.`;
 
   // Fold one capture outcome into the dedupe state: repaint (and report
   // "changed" to the poll loop) only on a transition, whether between two
@@ -262,6 +267,9 @@ export const Preview: Component<PreviewProps> = (props) => {
   };
 
   const refreshPane = async (): Promise<boolean> => {
+    if (hiddenMultiplexed()) {
+      return applyCapture(CAPTURE_FAILED, hiddenPlaceholder());
+    }
     const tmuxPane = props.session?.tmuxPane;
     if (!tmuxPane) {
       lastCaptured = null;
@@ -292,6 +300,13 @@ export const Preview: Component<PreviewProps> = (props) => {
   };
 
   createEffect(() => {
+    if (hiddenMultiplexed()) {
+      lastCaptured = null;
+      void Promise.resolve().then(() =>
+        applyCapture(CAPTURE_FAILED, hiddenPlaceholder()),
+      );
+      return;
+    }
     const tmuxPane = props.session?.tmuxPane;
     if (!tmuxPane) {
       lastCaptured = null;
@@ -332,7 +347,8 @@ export const Preview: Component<PreviewProps> = (props) => {
   // 500ms while the pane is changing, doubling up to 2s while it is quiet
   // so a silent pane costs 30 captures/min instead of 120.
   createEffect(() => {
-    if (!props.focused || !props.session?.tmuxPane) return;
+    if (!props.focused || !props.session?.tmuxPane || hiddenMultiplexed())
+      return;
 
     const MIN_DELAY = props.pollDelays?.min ?? 500;
     const MAX_DELAY = props.pollDelays?.max ?? 2000;

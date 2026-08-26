@@ -117,6 +117,13 @@ export const OPENCODE_CONFIG_DIR = join(
 );
 export const OPENCODE_PLUGIN_DIR = join(OPENCODE_CONFIG_DIR, "plugin");
 export const OPENCODE_PLUGIN_FILE = join(OPENCODE_PLUGIN_DIR, "ccmux.js");
+export const OPENCODE_V2_PLUGIN_DIR = join(OPENCODE_CONFIG_DIR, "plugins");
+export const OPENCODE_V2_PLUGIN_FILE = join(
+  OPENCODE_V2_PLUGIN_DIR,
+  "ccmux-v2.js",
+);
+export const OPENCODE_V2_PLUGIN_CONFIG_PATH = "./plugins/ccmux-v2.js";
+export const OPENCODE_CLI_CONFIG_FILE = join(OPENCODE_CONFIG_DIR, "cli.json");
 
 /**
  * OpenCode's SQLite state database (message/part history), read-only via
@@ -212,6 +219,7 @@ export const LOG_FILE = join(CCMUX_DIR, "ccmux.log");
 export const PREFS_FILE = join(CCMUX_DIR, "ccmux.json");
 export const STATE_FILE = join(CCMUX_DIR, "state.json");
 export const MARKERS_DIR = join(CCMUX_DIR, "session-pids");
+export const OPENCODE_FOCUS_DIR = join(CCMUX_DIR, "opencode-focus");
 
 const CCMUX_PANE_PREFIX = "ccmux-";
 export const SIDEBAR_PANE_TITLE = "ccmux-sidebar";
