@@ -36,6 +36,7 @@ import {
   deriveMultiplexedOpenCodeSessionId,
   isMultiplexedOpenCodeSession,
 } from "../../sessions";
+import { isAbsolute, relative } from "path";
 
 const CCMUX_VERSION: string = pkg.version;
 
@@ -43,6 +44,49 @@ const SENTINEL_PREFIX = "// ccmux-plugin v";
 const SENTINEL_REGEX = /^\/\/ ccmux-plugin v(\S+)/;
 const V2_SENTINEL_PREFIX = "// ccmux-v2-plugin v";
 const V2_SENTINEL_REGEX = /^\/\/ ccmux-v2-plugin v(\S+)/;
+
+interface MultiplexedCandidate {
+  marker: SessionPidMarker;
+  pane: NonNullable<
+    Awaited<ReturnType<HookManagerContext["getPaneHostingPid"]>>
+  >;
+}
+
+function directoryRank(candidate: MultiplexedCandidate): number {
+  const directory = candidate.marker.directory;
+  const paneCwd = candidate.pane.currentPath;
+  if (!directory || !paneCwd) return 0;
+  if (paneCwd === directory) return 2;
+  const child = relative(directory, paneCwd);
+  return child !== "" &&
+    child !== ".." &&
+    !child.startsWith("../") &&
+    !isAbsolute(child)
+    ? 1
+    : 0;
+}
+
+function compareMultiplexedCandidates(
+  a: MultiplexedCandidate,
+  b: MultiplexedCandidate,
+): number {
+  const directory = directoryRank(b) - directoryRank(a);
+  if (directory !== 0) return directory;
+  const focused =
+    Number(Boolean(b.marker.focused)) - Number(Boolean(a.marker.focused));
+  if (focused !== 0) return focused;
+  const activity =
+    (b.marker.state_timestamp ?? b.marker.timestamp) -
+    (a.marker.state_timestamp ?? a.marker.timestamp);
+  if (activity !== 0) return activity;
+  const ui = (a.marker.ui_instance_id ?? "").localeCompare(
+    b.marker.ui_instance_id ?? "",
+  );
+  if (ui !== 0) return ui;
+  const pid = a.marker.pid - b.marker.pid;
+  if (pid !== 0) return pid;
+  return a.pane.paneId.localeCompare(b.pane.paneId);
+}
 
 function inspectInstalledPlugin(
   path: string,
@@ -413,18 +457,34 @@ export class OpenCodePluginAdapter implements HookAdapter {
       }),
     );
 
+    const byNativeSession = new Map<string, SessionPidMarker[]>();
     for (const marker of markers) {
-      if (!marker.ui_instance_id) continue;
-      const id = deriveMultiplexedOpenCodeSessionId(
-        marker.ui_instance_id,
-        marker.session_id,
-      );
-      // Marker presence is authoritative for row lifetime. Pane discovery can
-      // transiently miss a live process; retain the existing exact row until
-      // this marker itself disappears (or an explicit removal excludes it).
+      const group = byNativeSession.get(marker.session_id);
+      if (group) group.push(marker);
+      else byNativeSession.set(marker.session_id, [marker]);
+    }
+
+    for (const [nativeSessionId, group] of byNativeSession) {
+      const id = deriveMultiplexedOpenCodeSessionId(nativeSessionId);
       desired.add(id);
-      const pane = panes.get(marker.pid);
-      if (!pane) continue;
+      const candidates = group
+        .map((marker) => ({ marker, pane: panes.get(marker.pid) }))
+        .filter(
+          (
+            candidate,
+          ): candidate is {
+            marker: SessionPidMarker;
+            pane: NonNullable<typeof candidate.pane>;
+          } => candidate.pane !== null && candidate.pane !== undefined,
+        )
+        .sort((a, b) => compareMultiplexedCandidates(a, b));
+      // Pane discovery may transiently miss every live process. Retain the
+      // stable native-session row until its final marker disappears, but as
+      // soon as another marker resolves it becomes the routing failover.
+      const chosen = candidates[0];
+      if (!chosen) continue;
+      const { marker, pane } = chosen;
+      if (!marker.ui_instance_id) continue;
       const state = markerStatusState(marker);
       const cwd = marker.directory ?? pane.currentPath;
       if (!cwd) continue;

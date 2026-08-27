@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, mock } from "bun:test";
-import { mkdirSync, rmSync } from "fs";
+import { mkdirSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -398,5 +398,78 @@ describe("OpenCode plugin → HookManager → adapter pipeline", () => {
     const session = sessionManager.getSession(sid)!;
     expect(session.status).toBe("working");
     expect(session.nativeSessionId).toBe("pre-existing");
+  });
+
+  it("V2 duplicate markers reconcile to one stable row and fail over through HookManager", async () => {
+    const exactPane = {
+      ...makePane(),
+      paneId: "%20",
+      panePid: 20_000,
+      currentPath: "/proj",
+    };
+    const scratchPane = {
+      ...makePane(),
+      paneId: "%21",
+      panePid: 21_000,
+      currentPath: "/proj/scratch",
+    };
+    ctx.getPaneHostingPid = async (pid) =>
+      pid === exactPane.panePid
+        ? exactPane
+        : pid === scratchPane.panePid
+          ? scratchPane
+          : null;
+    const exactPath = join(markersDir, "opencode-v2-ui-exact-ses-shared.json");
+    const scratchPath = join(
+      markersDir,
+      "opencode-v2-ui-scratch-ses-shared.json",
+    );
+    writeFileSync(
+      scratchPath,
+      JSON.stringify({
+        agent_type: "opencode",
+        pid: scratchPane.panePid,
+        ui_instance_id: "ui-scratch",
+        session_id: "ses-shared",
+        directory: "/proj",
+        title: "Shared",
+        focused: true,
+        state: "working",
+        timestamp: 300,
+      }),
+    );
+    writeFileSync(
+      exactPath,
+      JSON.stringify({
+        agent_type: "opencode",
+        pid: exactPane.panePid,
+        ui_instance_id: "ui-exact",
+        session_id: "ses-shared",
+        directory: "/proj",
+        title: "Shared",
+        focused: false,
+        state: "idle",
+        timestamp: 100,
+      }),
+    );
+
+    await manager.handleMarkerAdded(scratchPath);
+    await manager.handleMarkerAdded(exactPath);
+    expect(sessionManager.getSessions()).toHaveLength(1);
+    const row = sessionManager.getSessions()[0]!;
+    expect(row).toMatchObject({
+      id: "opencode:ses-shared",
+      uiInstanceId: "ui-exact",
+      tmuxPane: "%20",
+    });
+
+    rmSync(exactPath);
+    await manager.handleMarkerRemoved(exactPath);
+    expect(sessionManager.getSessions()).toHaveLength(1);
+    expect(sessionManager.getSessions()[0]).toMatchObject({
+      id: row.id,
+      uiInstanceId: "ui-scratch",
+      tmuxPane: "%21",
+    });
   });
 });

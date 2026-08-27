@@ -59,15 +59,25 @@ function makeMarker(overrides: Partial<SessionPidMarker>): SessionPidMarker {
 
 function writeMarkerToDisk(marker: SessionPidMarker): void {
   mkdirSync(markersDir, { recursive: true });
-  const path = join(
-    markersDir,
-    `${marker.agent_type}-${marker.session_id}.json`,
-  );
+  const path = markerPath(marker);
   writeFileSync(path, JSON.stringify(marker));
   loadMarkerIntoCache(path);
 }
 
-function makePane(paneId: string, panePid: number): TmuxPane {
+function markerPath(marker: SessionPidMarker): string {
+  return join(
+    markersDir,
+    marker.ui_instance_id
+      ? `opencode-v2-${marker.ui_instance_id}-${marker.session_id}.json`
+      : `${marker.agent_type}-${marker.session_id}.json`,
+  );
+}
+
+function makePane(
+  paneId: string,
+  panePid: number,
+  currentPath = "/tmp",
+): TmuxPane {
   return {
     paneId,
     panePid,
@@ -80,7 +90,7 @@ function makePane(paneId: string, panePid: number): TmuxPane {
     windowActivity: null,
     paneTitle: "opencode",
     currentCommand: "opencode",
-    currentPath: "/tmp",
+    currentPath,
   };
 }
 
@@ -687,7 +697,7 @@ describe("OpenCodePluginAdapter", () => {
   });
 
   describe("V2 multiplexed marker sync", () => {
-    it("creates one exact-state row per UI marker and removes the synthetic pane row", async () => {
+    it("creates one exact-state row per native tab and removes the synthetic pane row", async () => {
       const pane = makePane("%10", 8100);
       const sessions = new SessionManager();
       const synthetic = sessions.createPaneTrackedSession({
@@ -764,7 +774,7 @@ describe("OpenCodePluginAdapter", () => {
       await adapter.syncMarkers(ctx);
       expect(sessions.getSessions()).toHaveLength(1);
 
-      rmSync(join(markersDir, "opencode-ses-tab.json"));
+      rmSync(markerPath(marker));
       refreshMarkerCache();
       await adapter.syncMarkers(ctx);
       expect(sessions.getSessions()).toHaveLength(0);
@@ -791,6 +801,168 @@ describe("OpenCodePluginAdapter", () => {
       await adapter.syncMarkers(ctx);
 
       expect(sessions.getSession(id)).toBeDefined();
+    });
+
+    it("publishes one canonical row and prefers an exact project pane over scratch, worktree, and ancestor panes", async () => {
+      const panes = [
+        makePane("%20", 9000, "/Users/test"),
+        makePane("%21", 9001, "/Users/test/project/scratch"),
+        makePane("%22", 9002, "/Users/test/project"),
+        makePane("%23", 9003, "/Users/test/project-worktree"),
+      ];
+      const sessions = new SessionManager();
+      const ctx = makeCtx([], panes);
+      ctx.sessionManager = sessions;
+      for (const [index, pane] of panes.entries()) {
+        writeMarkerToDisk(
+          makeMarker({
+            pid: pane.panePid,
+            session_id: "ses-shared",
+            ui_instance_id: `ui-${index}`,
+            directory: "/Users/test/project",
+            focused: index !== 2,
+            state_timestamp: 1_700_000_400 + index,
+          }),
+        );
+      }
+
+      await adapter.syncMarkers(ctx);
+
+      expect(sessions.getSessions()).toHaveLength(1);
+      expect(sessions.getSessions()[0]).toMatchObject({
+        id: "opencode:ses-shared",
+        nativeSessionId: "ses-shared",
+        uiInstanceId: "ui-2",
+        pid: 9002,
+        tmuxPane: "%22",
+      });
+    });
+
+    it("uses focus then marker recency to break equal directory matches", async () => {
+      const panes = [
+        makePane("%30", 9100, "/repo"),
+        makePane("%31", 9101, "/repo"),
+      ];
+      const sessions = new SessionManager();
+      const ctx = makeCtx([], panes);
+      ctx.sessionManager = sessions;
+      const olderFocused = makeMarker({
+        pid: 9100,
+        session_id: "ses-tie",
+        ui_instance_id: "ui-focused",
+        directory: "/repo",
+        focused: true,
+        state_timestamp: 100,
+      });
+      const newer = makeMarker({
+        pid: 9101,
+        session_id: "ses-tie",
+        ui_instance_id: "ui-newer",
+        directory: "/repo",
+        focused: false,
+        state_timestamp: 200,
+      });
+      writeMarkerToDisk(olderFocused);
+      writeMarkerToDisk(newer);
+
+      await adapter.syncMarkers(ctx);
+      expect(sessions.getSessions()[0]?.uiInstanceId).toBe("ui-focused");
+
+      writeMarkerToDisk({ ...olderFocused, focused: false });
+      refreshMarkerCache();
+      await adapter.syncMarkers(ctx);
+      expect(sessions.getSessions()[0]?.uiInstanceId).toBe("ui-newer");
+    });
+
+    it("keeps the native-session row id while failing over after canonical marker removal", async () => {
+      const panes = [
+        makePane("%40", 9200, "/repo"),
+        makePane("%41", 9201, "/repo/subdir"),
+      ];
+      const sessions = new SessionManager();
+      const ctx = makeCtx([], panes);
+      ctx.sessionManager = sessions;
+      const exact = makeMarker({
+        pid: 9200,
+        session_id: "ses-failover",
+        ui_instance_id: "ui-exact",
+        directory: "/repo",
+      });
+      const fallback = makeMarker({
+        pid: 9201,
+        session_id: "ses-failover",
+        ui_instance_id: "ui-fallback",
+        directory: "/repo",
+      });
+      writeMarkerToDisk(exact);
+      writeMarkerToDisk(fallback);
+      await adapter.syncMarkers(ctx);
+      const id = sessions.getSessions()[0]!.id;
+
+      rmSync(markerPath(exact));
+      refreshMarkerCache();
+      await adapter.syncMarkers(ctx);
+
+      expect(sessions.getSessions()).toHaveLength(1);
+      expect(sessions.getSessions()[0]).toMatchObject({
+        id,
+        uiInstanceId: "ui-fallback",
+        pid: 9201,
+        tmuxPane: "%41",
+      });
+    });
+
+    it("fails over when the canonical pane disappears and keeps different native sessions distinct", async () => {
+      const exactPane = makePane("%50", 9300, "/repo");
+      const fallbackPane = makePane("%51", 9301, "/repo/subdir");
+      const panes = [exactPane, fallbackPane];
+      const sessions = new SessionManager();
+      const ctx = makeCtx([], panes);
+      ctx.sessionManager = sessions;
+      writeMarkerToDisk(
+        makeMarker({
+          pid: 9300,
+          session_id: "ses-one",
+          ui_instance_id: "ui-exact",
+          directory: "/repo",
+          title: "Same",
+        }),
+      );
+      writeMarkerToDisk(
+        makeMarker({
+          pid: 9301,
+          session_id: "ses-one",
+          ui_instance_id: "ui-fallback",
+          directory: "/repo",
+          title: "Same",
+        }),
+      );
+      writeMarkerToDisk(
+        makeMarker({
+          pid: 9301,
+          session_id: "ses-two",
+          ui_instance_id: "ui-fallback",
+          directory: "/repo",
+          title: "Same",
+        }),
+      );
+      await adapter.syncMarkers(ctx);
+      expect(sessions.getSessions()).toHaveLength(2);
+
+      ctx.getPaneHostingPid = async (pid) =>
+        pid === fallbackPane.panePid ? fallbackPane : null;
+      await adapter.syncMarkers(ctx);
+
+      expect(sessions.getSessions()).toHaveLength(2);
+      expect(
+        sessions.getSessions().find((row) => row.nativeSessionId === "ses-one"),
+      ).toMatchObject({ uiInstanceId: "ui-fallback", tmuxPane: "%51" });
+      expect(
+        sessions
+          .getSessions()
+          .map((row) => row.nativeSessionId)
+          .sort(),
+      ).toEqual(["ses-one", "ses-two"]);
     });
   });
 });

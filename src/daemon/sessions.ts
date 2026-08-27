@@ -147,16 +147,16 @@ export function findSessionForPane(
     matches.find(
       (session) =>
         isMultiplexedOpenCodeSession(session) && session.focused === true,
-    ) ??
-    matches.find((session) => !isMultiplexedOpenCodeSession(session))
+    ) ?? matches.find((session) => !isMultiplexedOpenCodeSession(session))
   );
 }
 
 export function deriveMultiplexedOpenCodeSessionId(
-  uiInstanceId: string,
   nativeSessionId: string,
 ): string {
-  return `opencode:${encodeURIComponent(uiInstanceId)}:${encodeURIComponent(nativeSessionId)}`;
+  // A tab can be open in several OpenCode UIs at once. The daemon chooses
+  // one hosting UI for routing, but the row represents the native session.
+  return `opencode:${encodeURIComponent(nativeSessionId)}`;
 }
 
 /**
@@ -489,14 +489,15 @@ export class SessionManager extends EventEmitter {
   createMultiplexedOpenCodeSession(
     input: MultiplexedOpenCodeSessionInput,
   ): Session {
-    const id = deriveMultiplexedOpenCodeSessionId(
-      input.uiInstanceId,
-      input.nativeSessionId,
-    );
+    const id = deriveMultiplexedOpenCodeSessionId(input.nativeSessionId);
     const existing = this.sessions.get(id);
     if (existing) {
       let changed = false;
       const project = deriveProject(input.cwd, "opencode");
+      if (existing.uiInstanceId !== input.uiInstanceId) {
+        existing.uiInstanceId = input.uiInstanceId;
+        changed = true;
+      }
       if (existing.cwd !== input.cwd) {
         existing.cwd = input.cwd;
         existing.project = project;

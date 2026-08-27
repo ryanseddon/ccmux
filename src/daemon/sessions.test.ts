@@ -651,7 +651,7 @@ describe("SessionManager", () => {
     expect(session?.logPath).toBe("/tmp/rollout-1.jsonl");
   });
 
-  it("keeps stable multiplexed rows for the same native session in two UI instances", () => {
+  it("keeps one stable multiplexed row while its chosen UI instance changes", () => {
     const manager = new SessionManager();
     const base = {
       nativeSessionId: "ses_same",
@@ -674,13 +674,13 @@ describe("SessionManager", () => {
       focused: false,
     });
 
-    expect(a.id).not.toBe(b.id);
-    expect(manager.getSessions()).toHaveLength(2);
+    expect(a.id).toBe(b.id);
+    expect(manager.getSessions()).toHaveLength(1);
     expect(a.trackingMode).toBe("multiplexed");
-    expect(a.uiInstanceId).toBe("ui-a");
-    expect(a.title).toBe("Alpha");
-    expect(a.focused).toBe(true);
-    expect(manager.getSessionByNativeSessionId("ses_same")).toBeUndefined();
+    expect(b.uiInstanceId).toBe("ui-b");
+    expect(b.title).toBe("Beta");
+    expect(b.focused).toBe(false);
+    expect(manager.getSessionByNativeSessionId("ses_same")?.id).toBe(a.id);
 
     const recreated = manager.createMultiplexedOpenCodeSession({
       ...base,
@@ -690,7 +690,8 @@ describe("SessionManager", () => {
       state: { status: "working" },
     });
     expect(recreated.id).toBe(a.id);
-    expect(manager.getSessions()).toHaveLength(2);
+    expect(manager.getSessions()).toHaveLength(1);
+    expect(recreated.uiInstanceId).toBe("ui-a");
     expect(recreated.title).toBe("Renamed");
     expect(recreated.focused).toBe(false);
     expect(recreated.status).toBe("working");
