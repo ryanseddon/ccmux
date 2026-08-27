@@ -13,6 +13,8 @@ import {
   OPENCODE_FOCUS_DIR,
   OPENCODE_PLUGIN_DIR,
   OPENCODE_PLUGIN_FILE,
+  OPENCODE_V2_LEGACY_PLUGIN_CONFIG_PATH,
+  OPENCODE_V2_LEGACY_PLUGIN_FILE,
   OPENCODE_V2_PLUGIN_CONFIG_PATH,
   OPENCODE_V2_PLUGIN_DIR,
   OPENCODE_V2_PLUGIN_FILE,
@@ -99,6 +101,36 @@ function hasV2Registration(config: CliConfig | null): boolean {
   return config?.plugins?.includes(OPENCODE_V2_PLUGIN_CONFIG_PATH) ?? false;
 }
 
+function hasLegacyV2Registration(config: CliConfig | null): boolean {
+  return (
+    config?.plugins?.includes(OPENCODE_V2_LEGACY_PLUGIN_CONFIG_PATH) ?? false
+  );
+}
+
+function migrateV2Registration(config: CliConfig): boolean {
+  const plugins: string[] = [];
+  let hasCurrent = false;
+  for (const entry of config.plugins ?? []) {
+    const migrated =
+      entry === OPENCODE_V2_LEGACY_PLUGIN_CONFIG_PATH
+        ? OPENCODE_V2_PLUGIN_CONFIG_PATH
+        : entry;
+    if (migrated === OPENCODE_V2_PLUGIN_CONFIG_PATH) {
+      if (hasCurrent) continue;
+      hasCurrent = true;
+    }
+    plugins.push(migrated);
+  }
+  if (!hasCurrent) {
+    plugins.push(OPENCODE_V2_PLUGIN_CONFIG_PATH);
+  }
+  if (JSON.stringify(plugins) === JSON.stringify(config.plugins ?? [])) {
+    return false;
+  }
+  config.plugins = plugins;
+  return true;
+}
+
 /**
  * OpenCode plugin-based hook integration.
  *
@@ -163,6 +195,10 @@ export class OpenCodePluginAdapter implements HookAdapter {
         OPENCODE_V2_PLUGIN_FILE,
         V2_SENTINEL_REGEX,
       );
+      const legacyV2Inspection = inspectInstalledPlugin(
+        OPENCODE_V2_LEGACY_PLUGIN_FILE,
+        V2_SENTINEL_REGEX,
+      );
       if (v2Inspection.exists && !v2Inspection.owned) {
         lines.push(
           `Skipped ${OPENCODE_V2_PLUGIN_FILE}: first line does not start with "${V2_SENTINEL_PREFIX}".`,
@@ -178,12 +214,19 @@ export class OpenCodePluginAdapter implements HookAdapter {
         writeFileSync(v2Tmp, v2Source);
         renameSync(v2Tmp, OPENCODE_V2_PLUGIN_FILE);
         changed = true;
-        if (!hasV2Registration(cliConfig)) {
-          cliConfig.plugins = [
-            ...(cliConfig.plugins ?? []),
-            OPENCODE_V2_PLUGIN_CONFIG_PATH,
-          ];
+        if (migrateV2Registration(cliConfig)) {
           writeCliConfig(cliConfig);
+          changed = true;
+        }
+        if (legacyV2Inspection.owned) {
+          unlinkSync(OPENCODE_V2_LEGACY_PLUGIN_FILE);
+          lines.push(
+            `Removed legacy OpenCode V2 TUI plugin: ${OPENCODE_V2_LEGACY_PLUGIN_FILE}`,
+          );
+        } else if (legacyV2Inspection.exists) {
+          lines.push(
+            `Skipped foreign legacy V2 plugin: ${OPENCODE_V2_LEGACY_PLUGIN_FILE}`,
+          );
         }
         lines.push(
           `Installed OpenCode V2 TUI plugin: ${OPENCODE_V2_PLUGIN_FILE}`,
@@ -211,32 +254,38 @@ export class OpenCodePluginAdapter implements HookAdapter {
       lines.push(`Removed ${OPENCODE_PLUGIN_FILE}`);
     }
 
-    const v2Inspection = inspectInstalledPlugin(
-      OPENCODE_V2_PLUGIN_FILE,
-      V2_SENTINEL_REGEX,
-    );
     const cliConfig = readCliConfig();
     if (!cliConfig) {
       lines.push(
         `Skipped OpenCode V2 removal: ${OPENCODE_CLI_CONFIG_FILE} could not be safely modified.`,
       );
-    } else if (
-      v2Inspection.owned ||
-      (!v2Inspection.exists && hasV2Registration(cliConfig))
-    ) {
-      cliConfig.plugins = (cliConfig.plugins ?? []).filter(
-        (entry) => entry !== OPENCODE_V2_PLUGIN_CONFIG_PATH,
+    } else {
+      const plugins = cliConfig.plugins ?? [];
+      cliConfig.plugins = plugins.filter(
+        (entry) =>
+          entry !== OPENCODE_V2_PLUGIN_CONFIG_PATH &&
+          entry !== OPENCODE_V2_LEGACY_PLUGIN_CONFIG_PATH,
       );
-      writeCliConfig(cliConfig);
-      if (v2Inspection.owned) unlinkSync(OPENCODE_V2_PLUGIN_FILE);
-      changed = true;
-      lines.push(
-        v2Inspection.owned
-          ? `Removed ${OPENCODE_V2_PLUGIN_FILE}`
-          : `Removed stale V2 plugin registration from ${OPENCODE_CLI_CONFIG_FILE}`,
-      );
-    } else if (v2Inspection.exists) {
-      lines.push(`Skipped foreign V2 plugin: ${OPENCODE_V2_PLUGIN_FILE}`);
+      if (cliConfig.plugins.length !== plugins.length) {
+        writeCliConfig(cliConfig);
+        changed = true;
+        lines.push(
+          `Removed V2 plugin registrations from ${OPENCODE_CLI_CONFIG_FILE}`,
+        );
+      }
+    }
+    for (const path of [
+      OPENCODE_V2_PLUGIN_FILE,
+      OPENCODE_V2_LEGACY_PLUGIN_FILE,
+    ]) {
+      const v2Inspection = inspectInstalledPlugin(path, V2_SENTINEL_REGEX);
+      if (v2Inspection.owned) {
+        unlinkSync(path);
+        changed = true;
+        lines.push(`Removed ${path}`);
+      } else if (v2Inspection.exists) {
+        lines.push(`Skipped foreign V2 plugin: ${path}`);
+      }
     }
     lines.push(
       "Marker files under ~/.config/ccmux/session-pids/ will be swept on the next daemon cycle.",
@@ -271,9 +320,18 @@ export class OpenCodePluginAdapter implements HookAdapter {
       V2_SENTINEL_REGEX,
     );
     const config = readCliConfig();
+    const legacy = inspectInstalledPlugin(
+      OPENCODE_V2_LEGACY_PLUGIN_FILE,
+      V2_SENTINEL_REGEX,
+    );
     if (!v2.owned || !hasV2Registration(config)) {
       warnings.push(
         "OpenCode V2 TUI integration is not fully registered; run `ccmux setup --agent opencode`.",
+      );
+    }
+    if (legacy.owned || hasLegacyV2Registration(config)) {
+      warnings.push(
+        `OpenCode V2 TUI integration uses legacy path ${OPENCODE_V2_LEGACY_PLUGIN_CONFIG_PATH}; run \`ccmux setup --agent opencode\` to migrate.`,
       );
     }
     return warnings;

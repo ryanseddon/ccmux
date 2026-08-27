@@ -117,12 +117,22 @@ export const OPENCODE_CONFIG_DIR = join(
 );
 export const OPENCODE_PLUGIN_DIR = join(OPENCODE_CONFIG_DIR, "plugin");
 export const OPENCODE_PLUGIN_FILE = join(OPENCODE_PLUGIN_DIR, "ccmux.js");
-export const OPENCODE_V2_PLUGIN_DIR = join(OPENCODE_CONFIG_DIR, "plugins");
+export const OPENCODE_V2_PLUGIN_DIR = join(
+  OPENCODE_CONFIG_DIR,
+  "plugins",
+  "cli",
+);
 export const OPENCODE_V2_PLUGIN_FILE = join(
   OPENCODE_V2_PLUGIN_DIR,
   "ccmux-v2.js",
 );
-export const OPENCODE_V2_PLUGIN_CONFIG_PATH = "./plugins/ccmux-v2.js";
+export const OPENCODE_V2_PLUGIN_CONFIG_PATH = "./plugins/cli/ccmux-v2.js";
+export const OPENCODE_V2_LEGACY_PLUGIN_FILE = join(
+  OPENCODE_CONFIG_DIR,
+  "plugins",
+  "ccmux-v2.js",
+);
+export const OPENCODE_V2_LEGACY_PLUGIN_CONFIG_PATH = "./plugins/ccmux-v2.js";
 export const OPENCODE_CLI_CONFIG_FILE = join(OPENCODE_CONFIG_DIR, "cli.json");
 
 /**

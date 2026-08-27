@@ -112,7 +112,7 @@ Structural notes for anyone extending this:
 
 ## OpenCode-specific caveats
 
-- OpenCode V1 uses the auto-discovered `~/.config/opencode/plugin/ccmux.js`. V2 additionally installs `~/.config/opencode/plugins/ccmux-v2.js` and registers it in strict-JSON `cli.json`; setup preserves non-JSON config rather than rewriting JSONC. Both files are sentinel-owned and uninstall never deletes foreign files.
+- OpenCode V1 uses the auto-discovered `~/.config/opencode/plugin/ccmux.js`. V2 additionally installs `~/.config/opencode/plugins/cli/ccmux-v2.js` and registers it in strict-JSON `cli.json`; the `cli/` subdirectory keeps the TUI-only plugin out of server plugin auto-discovery. Setup migrates the former top-level path and preserves non-JSON config rather than rewriting JSONC. Both files are sentinel-owned and uninstall never deletes foreign files.
 - V1 folds a server process's markers into one row. V2 emits a UI-instance id, tab title, and focused bit, so ccmux keeps one stable multiplexed row per `(ui instance, native session)` even when tabs share a PID, pane, and cwd. Marker presence owns row lifetime; a transient pane-correlation miss does not delete a cached row.
 - Pane-based lookup selects the focused multiplexed row. Hidden tabs render/search by title and metadata, never inherit the focused tab's pane capture, active styling, attention, or viewed state.
 - Any operation that types into a multiplexed pane first requests and waits for exact tab-focus acknowledgement. Failure is a 409 with no keystrokes sent. Per-tab kill/restart also returns 409 because the process is shared; kill-all remains process-wide.
@@ -208,7 +208,7 @@ oh-my-pi (`omp`) is a hard fork of Pi that kept Pi's extension API, so its adapt
 - Codex hooks: `~/.codex/hooks/ccmux-session-start.sh`, `ccmux-stop.sh`, `ccmux-permission-request.sh`
 - OpenCode logs: `~/.local/share/opencode/log/` (daily-rotated, plain-text)
 - OpenCode plugin: `~/.config/opencode/plugin/ccmux.js` (written by `ccmux setup --agent opencode`; honors `$XDG_CONFIG_HOME`)
-- OpenCode V2 plugin: `~/.config/opencode/plugins/ccmux-v2.js`, registered by `~/.config/opencode/cli.json`
+- OpenCode V2 plugin: `~/.config/opencode/plugins/cli/ccmux-v2.js`, registered by `~/.config/opencode/cli.json`
 - OpenCode conversation store: `~/.local/share/opencode/opencode.db` (SQLite, WAL, hot; opened READ-ONLY by the transcript reader behind `ccmux last` / `ccmux handoff`, which queries it by native session id. Unconditional path with no XDG override, unlike the config dir above)
 - Cursor hooks.json: `~/.cursor/hooks.json` (written by `ccmux setup --agent cursor`; user-authored `version` field and unrelated entries preserved on uninstall)
 - Cursor hooks: `~/.cursor/hooks/ccmux-session-start.sh`, `ccmux-session-end.sh`, `ccmux-before-submit-prompt.sh`, `ccmux-stop.sh`

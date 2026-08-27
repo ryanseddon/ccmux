@@ -10,8 +10,13 @@ const tempRoot = join(
 const opencodeConfigDir = join(tempRoot, "opencode");
 const opencodePluginDir = join(opencodeConfigDir, "plugin");
 const opencodePluginFile = join(opencodePluginDir, "ccmux.js");
-const opencodeV2PluginDir = join(opencodeConfigDir, "plugins");
+const opencodeV2PluginDir = join(opencodeConfigDir, "plugins", "cli");
 const opencodeV2PluginFile = join(opencodeV2PluginDir, "ccmux-v2.js");
+const opencodeV2LegacyPluginFile = join(
+  opencodeConfigDir,
+  "plugins",
+  "ccmux-v2.js",
+);
 const opencodeCliConfigFile = join(opencodeConfigDir, "cli.json");
 const opencodeFocusDir = join(tempRoot, "focus");
 const markersDir = join(tempRoot, "markers");
@@ -24,7 +29,9 @@ mock.module("../../../lib/config", () => ({
   OPENCODE_PLUGIN_FILE: opencodePluginFile,
   OPENCODE_V2_PLUGIN_DIR: opencodeV2PluginDir,
   OPENCODE_V2_PLUGIN_FILE: opencodeV2PluginFile,
-  OPENCODE_V2_PLUGIN_CONFIG_PATH: "./plugins/ccmux-v2.js",
+  OPENCODE_V2_PLUGIN_CONFIG_PATH: "./plugins/cli/ccmux-v2.js",
+  OPENCODE_V2_LEGACY_PLUGIN_FILE: opencodeV2LegacyPluginFile,
+  OPENCODE_V2_LEGACY_PLUGIN_CONFIG_PATH: "./plugins/ccmux-v2.js",
   OPENCODE_CLI_CONFIG_FILE: opencodeCliConfigFile,
   OPENCODE_FOCUS_DIR: opencodeFocusDir,
   MARKERS_DIR: markersDir,
@@ -186,8 +193,65 @@ describe("OpenCodePluginAdapter", () => {
       );
       expect(JSON.parse(readFileSync(opencodeCliConfigFile, "utf8"))).toEqual({
         theme: { name: "custom" },
-        plugins: ["./plugins/user.js", "./plugins/ccmux-v2.js"],
+        plugins: ["./plugins/user.js", "./plugins/cli/ccmux-v2.js"],
       });
+    });
+
+    it("migrates the legacy file and registration", async () => {
+      mkdirSync(join(opencodeConfigDir, "plugins"), { recursive: true });
+      writeFileSync(
+        opencodeV2LegacyPluginFile,
+        `// ccmux-v2-plugin v0.0.0\n// old\n`,
+      );
+      writeFileSync(
+        opencodeCliConfigFile,
+        JSON.stringify({
+          plugins: [
+            "./plugins/user.js",
+            "./plugins/user.js",
+            "./plugins/ccmux-v2.js",
+          ],
+        }),
+      );
+
+      await adapter.install();
+
+      expect(existsSync(opencodeV2PluginFile)).toBe(true);
+      expect(existsSync(opencodeV2LegacyPluginFile)).toBe(false);
+      expect(
+        JSON.parse(readFileSync(opencodeCliConfigFile, "utf8")).plugins,
+      ).toEqual([
+        "./plugins/user.js",
+        "./plugins/user.js",
+        "./plugins/cli/ccmux-v2.js",
+      ]);
+    });
+
+    it("migrates registration but refuses to delete a foreign legacy file", async () => {
+      mkdirSync(join(opencodeConfigDir, "plugins"), { recursive: true });
+      const foreign = "// user-owned legacy plugin\n";
+      writeFileSync(opencodeV2LegacyPluginFile, foreign);
+      writeFileSync(
+        opencodeCliConfigFile,
+        JSON.stringify({ plugins: ["./plugins/ccmux-v2.js"] }),
+      );
+
+      const { lines } = await adapter.install();
+
+      expect(readFileSync(opencodeV2LegacyPluginFile, "utf8")).toBe(foreign);
+      expect(
+        JSON.parse(readFileSync(opencodeCliConfigFile, "utf8")).plugins,
+      ).toEqual(["./plugins/cli/ccmux-v2.js"]);
+      expect(lines.some((line) => line.includes("foreign legacy"))).toBe(true);
+    });
+
+    it("does not duplicate the V2 registration on repeated install", async () => {
+      await adapter.install();
+      await adapter.install();
+
+      expect(
+        JSON.parse(readFileSync(opencodeCliConfigFile, "utf8")).plugins,
+      ).toEqual(["./plugins/cli/ccmux-v2.js"]);
     });
 
     it("refuses to rewrite JSONC and does not install an unregistered V2 plugin", async () => {
@@ -216,7 +280,38 @@ describe("OpenCodePluginAdapter", () => {
       expect(existsSync(opencodeV2PluginFile)).toBe(false);
       expect(
         JSON.parse(readFileSync(opencodeCliConfigFile, "utf8")).plugins,
-      ).not.toContain("./plugins/ccmux-v2.js");
+      ).not.toContain("./plugins/cli/ccmux-v2.js");
+    });
+
+    it("removes both registrations and only owned V2 files", async () => {
+      mkdirSync(opencodeV2PluginDir, { recursive: true });
+      writeFileSync(
+        opencodeV2PluginFile,
+        `// ccmux-v2-plugin v${CCMUX_VERSION}\n`,
+      );
+      const foreign = "// user-owned legacy plugin\n";
+      writeFileSync(opencodeV2LegacyPluginFile, foreign);
+      writeFileSync(
+        opencodeCliConfigFile,
+        JSON.stringify({
+          theme: "custom",
+          plugins: [
+            "./plugins/ccmux-v2.js",
+            "./plugins/user.js",
+            "./plugins/cli/ccmux-v2.js",
+          ],
+        }),
+      );
+
+      const { lines } = await adapter.uninstall();
+
+      expect(existsSync(opencodeV2PluginFile)).toBe(false);
+      expect(readFileSync(opencodeV2LegacyPluginFile, "utf8")).toBe(foreign);
+      expect(JSON.parse(readFileSync(opencodeCliConfigFile, "utf8"))).toEqual({
+        theme: "custom",
+        plugins: ["./plugins/user.js"],
+      });
+      expect(lines.some((line) => line.includes("Skipped foreign"))).toBe(true);
     });
 
     it("leaves a non-ccmux file alone and reports skip", async () => {
@@ -254,6 +349,21 @@ describe("OpenCodePluginAdapter", () => {
     it("reports no anomaly when versions match", async () => {
       await adapter.install();
       expect(adapter.describeInstallAnomalies()).toEqual([]);
+    });
+
+    it("reports the legacy V2 path until setup migrates it", async () => {
+      await adapter.install();
+      mkdirSync(join(opencodeConfigDir, "plugins"), { recursive: true });
+      writeFileSync(
+        opencodeV2LegacyPluginFile,
+        `// ccmux-v2-plugin v${CCMUX_VERSION}\n`,
+      );
+
+      expect(
+        adapter
+          .describeInstallAnomalies()
+          .some((warning) => warning.includes("legacy path")),
+      ).toBe(true);
     });
 
     it("reports version skew when the sentinel version disagrees", async () => {
