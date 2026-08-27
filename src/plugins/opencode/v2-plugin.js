@@ -7,12 +7,19 @@ import {
   unlink,
   writeFile,
 } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { Plugin } from "@opencode-ai/plugin/tui";
 
 export function makePlugin({
-  markersDir,
-  focusDir,
+  markersDir = join(
+    process.env.CCMUX_HOME || join(homedir(), ".config", "ccmux"),
+    "session-pids",
+  ),
+  focusDir = join(
+    process.env.CCMUX_HOME || join(homedir(), ".config", "ccmux"),
+    "opencode-focus",
+  ),
   version,
   now = Date.now,
   pollMs = 250,
@@ -202,7 +209,5 @@ export function makePlugin({
 }
 
 export default makePlugin({
-  markersDir: "__CCMUX_MARKERS_DIR__",
-  focusDir: "__CCMUX_FOCUS_DIR__",
   version: "__CCMUX_VERSION__",
 });

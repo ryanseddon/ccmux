@@ -169,11 +169,20 @@ describe("OpenCodePluginAdapter", () => {
       expect(firstLine).toBe("// user-authored plugin");
     });
 
-    it("renders with the MARKERS_DIR and CCMUX_VERSION substituted", async () => {
+    it("installs portable source with only CCMUX_VERSION substituted", async () => {
       await adapter.install();
       const body = readFileSync(opencodePluginFile, "utf-8");
-      expect(body).toContain(`markersDir: ${JSON.stringify(markersDir)}`);
       expect(body).toContain(`version: "${CCMUX_VERSION}"`);
+      expect(body).toContain("process.env.CCMUX_HOME");
+      expect(body).not.toContain(markersDir);
+      expect(body).not.toMatch(/\/(Users|home)\//);
+
+      const v2Body = readFileSync(opencodeV2PluginFile, "utf-8");
+      expect(v2Body).toContain(`version: "${CCMUX_VERSION}"`);
+      expect(v2Body).toContain("process.env.CCMUX_HOME");
+      expect(v2Body).not.toContain(markersDir);
+      expect(v2Body).not.toContain(opencodeFocusDir);
+      expect(v2Body).not.toMatch(/\/(Users|home)\//);
     });
 
     it("installs and registers the separate V2 plugin without losing config", async () => {

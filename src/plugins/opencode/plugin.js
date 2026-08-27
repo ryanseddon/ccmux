@@ -5,6 +5,7 @@
 // Source: github.com/epilande/ccmux
 
 import { writeFile, rename, unlink, mkdir } from "node:fs/promises";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 /**
@@ -34,7 +35,7 @@ import { join } from "node:path";
 
 /**
  * @typedef {object} MakePluginOptions
- * @property {string} markersDir   Absolute path to ccmux marker directory.
+ * @property {string} [markersDir] Absolute path to ccmux marker directory.
  * @property {string} version      ccmux version string (for the sentinel line).
  * @property {() => number} [now]  Injected clock, ms epoch. Defaults to Date.now.
  */
@@ -43,7 +44,14 @@ import { join } from "node:path";
  * Build an OpenCode plugin bound to the given markers dir.
  * @param {MakePluginOptions} opts
  */
-export function makePlugin({ markersDir, version, now = Date.now }) {
+export function makePlugin({
+  markersDir = join(
+    process.env.CCMUX_HOME || join(homedir(), ".config", "ccmux"),
+    "session-pids",
+  ),
+  version,
+  now = Date.now,
+}) {
   const AGENT_TYPE = "opencode";
 
   /** @type {Map<string, Promise<void>>} */
@@ -398,7 +406,6 @@ function describeQuestion(properties) {
 }
 
 const ccmuxPlugin = makePlugin({
-  markersDir: "__CCMUX_MARKERS_DIR__",
   version: "__CCMUX_VERSION__",
 });
 

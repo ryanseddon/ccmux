@@ -6,7 +6,7 @@
  */
 
 export interface MakePluginOptions {
-  markersDir: string;
+  markersDir?: string;
   version: string;
   now?: () => number;
 }

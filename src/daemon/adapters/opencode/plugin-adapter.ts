@@ -7,10 +7,8 @@ import {
   writeFileSync,
 } from "fs";
 import {
-  MARKERS_DIR,
   OPENCODE_CLI_CONFIG_FILE,
   OPENCODE_CONFIG_DIR,
-  OPENCODE_FOCUS_DIR,
   OPENCODE_PLUGIN_DIR,
   OPENCODE_PLUGIN_FILE,
   OPENCODE_V2_LEGACY_PLUGIN_CONFIG_PATH,
@@ -166,7 +164,6 @@ export class OpenCodePluginAdapter implements HookAdapter {
       mkdirSync(OPENCODE_PLUGIN_DIR, { recursive: true });
 
       const source = renderOpenCodePlugin({
-        markersDir: MARKERS_DIR,
         version: CCMUX_VERSION,
       });
       const tmp = `${OPENCODE_PLUGIN_FILE}.tmp.${process.pid}.${Date.now()}`;
@@ -206,8 +203,6 @@ export class OpenCodePluginAdapter implements HookAdapter {
       } else {
         mkdirSync(OPENCODE_V2_PLUGIN_DIR, { recursive: true });
         const v2Source = renderOpenCodeV2Plugin({
-          markersDir: MARKERS_DIR,
-          focusDir: OPENCODE_FOCUS_DIR,
           version: CCMUX_VERSION,
         });
         const v2Tmp = `${OPENCODE_V2_PLUGIN_FILE}.tmp.${process.pid}.${Date.now()}`;

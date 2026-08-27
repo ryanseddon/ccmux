@@ -1,6 +1,6 @@
 export interface V2PluginOptions {
-  markersDir: string;
-  focusDir: string;
+  markersDir?: string;
+  focusDir?: string;
   version: string;
   now?: () => number;
   pollMs?: number;

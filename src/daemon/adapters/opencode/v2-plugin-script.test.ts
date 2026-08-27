@@ -14,26 +14,28 @@ import {
 } from "./v2-plugin-script";
 
 const root = join(process.cwd(), ".ryan", "tmp", `v2-plugin-${process.pid}`);
+const originalCcmuxHome = process.env.CCMUX_HOME;
 
 beforeEach(() => {
   rmSync(root, { recursive: true, force: true });
   mkdirSync(root, { recursive: true });
 });
 
-afterEach(() => rmSync(root, { recursive: true, force: true }));
+afterEach(() => {
+  if (originalCcmuxHome === undefined) delete process.env.CCMUX_HOME;
+  else process.env.CCMUX_HOME = originalCcmuxHome;
+  rmSync(root, { recursive: true, force: true });
+});
 
 describe("renderOpenCodeV2Plugin", () => {
-  it("renders all install-time values and keeps the V2 sentinel first", () => {
+  it("renders only the version and keeps runtime paths portable", () => {
     const output = renderOpenCodeV2Plugin({
-      markersDir: '/markers/with"quote',
-      focusDir: "/focus",
       version: "3.2.1",
     });
     expect(output.split("\n")[0]).toBe("// ccmux-v2-plugin v3.2.1");
-    expect(output).toContain(
-      `markersDir: ${JSON.stringify('/markers/with"quote')}`,
-    );
-    expect(output).toContain('focusDir: "/focus"');
+    expect(output).toContain("process.env.CCMUX_HOME");
+    expect(output).toContain('join(homedir(), ".config", "ccmux")');
+    expect(output).not.toMatch(/\/(Users|home)\//);
     expect(output).not.toContain("__CCMUX_");
   });
 
@@ -46,13 +48,32 @@ describe("renderOpenCodeV2Plugin", () => {
     expect(source).not.toContain("handledRequests");
   });
 
+  it("defaults markers and focus dirs from CCMUX_HOME at runtime", async () => {
+    const ccmuxHome = join(root, "runtime-home");
+    process.env.CCMUX_HOME = ccmuxHome;
+    const modulePath = join(root, "default-plugin.mjs");
+    const rendered = renderOpenCodeV2Plugin({ version: "1.0.0" }).replace(
+      'import { Plugin } from "@opencode-ai/plugin/tui";',
+      "const Plugin = { define: (value) => value };",
+    );
+    writeFileSync(modulePath, rendered);
+    const { makePlugin } = await import(modulePath);
+    const plugin = makePlugin({ version: "1.0.0", pollMs: 60_000 });
+    const cleanup = await plugin.setup({
+      ui: { tabs: { list: () => [], focus: () => false } },
+      data: { listen: () => () => {} },
+    });
+
+    expect(existsSync(join(ccmuxHome, "session-pids"))).toBe(true);
+    expect(existsSync(join(ccmuxHome, "opencode-focus"))).toBe(true);
+    await cleanup();
+  });
+
   it("reconciles only open tabs, focuses exact requests, acks, and disposes", async () => {
     const markersDir = join(root, "markers");
     const focusDir = join(root, "focus");
     const modulePath = join(root, "plugin.mjs");
     const rendered = renderOpenCodeV2Plugin({
-      markersDir,
-      focusDir,
       version: "1.0.0",
     }).replace(
       'import { Plugin } from "@opencode-ai/plugin/tui";',
@@ -164,9 +185,7 @@ describe("renderOpenCodeV2Plugin", () => {
       session_id: "two/slash",
       success: true,
     });
-    expect(
-      existsSync(join(focusDir, `${requestID}.request.json`)),
-    ).toBe(false);
+    expect(existsSync(join(focusDir, `${requestID}.request.json`))).toBe(false);
 
     const missingID = "request-missing";
     writeFileSync(
@@ -185,9 +204,7 @@ describe("renderOpenCodeV2Plugin", () => {
       session_id: "not-open",
       success: false,
     });
-    expect(
-      existsSync(join(focusDir, `${missingID}.request.json`)),
-    ).toBe(false);
+    expect(existsSync(join(focusDir, `${missingID}.request.json`))).toBe(false);
 
     focusSucceeds = false;
     const failedID = "request-failed";

@@ -1,5 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, rmSync, readFileSync, existsSync, readdirSync } from "fs";
+import {
+  mkdirSync,
+  rmSync,
+  readFileSync,
+  existsSync,
+  readdirSync,
+  writeFileSync,
+} from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -80,6 +87,8 @@ function makeClock(): { now: () => number; advance: (ms: number) => void } {
 
 let tempRoot: string;
 let markersDir: string;
+const originalCcmuxHome = process.env.CCMUX_HOME;
+const originalHome = process.env.HOME;
 
 beforeEach(() => {
   tempRoot = join(
@@ -91,7 +100,51 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (originalCcmuxHome === undefined) delete process.env.CCMUX_HOME;
+  else process.env.CCMUX_HOME = originalCcmuxHome;
+  if (originalHome === undefined) delete process.env.HOME;
+  else process.env.HOME = originalHome;
   rmSync(tempRoot, { recursive: true, force: true });
+});
+
+describe("makePlugin: runtime paths", () => {
+  it("defaults from a non-empty CCMUX_HOME at plugin creation time", async () => {
+    const ccmuxHome = join(tempRoot, "override");
+    process.env.CCMUX_HOME = ccmuxHome;
+    const plugin = makePlugin({ version: "1.0.0" });
+    const hooks = await plugin({
+      client: makeClient([], {}),
+      directory: tempRoot,
+    });
+    await awaitSeed(hooks);
+    expect(existsSync(join(ccmuxHome, "session-pids"))).toBe(true);
+  });
+
+  it("falls back to HOME when CCMUX_HOME is empty", async () => {
+    const home = join(tempRoot, "home");
+    const script = join(tempRoot, "home-default.mjs");
+    writeFileSync(
+      script,
+      `import { makePlugin } from ${JSON.stringify(join(import.meta.dir, "plugin.js"))};
+const plugin = makePlugin({ version: "1.0.0" });
+const hooks = await plugin({
+  client: { session: {
+    list: async () => ({ data: [] }),
+    status: async () => ({ data: {} }),
+  } },
+});
+await hooks._seedReady;
+`,
+    );
+    const child = Bun.spawn([process.execPath, script], {
+      env: { ...process.env, CCMUX_HOME: "", HOME: home },
+      stderr: "pipe",
+    });
+    expect(await child.exited).toBe(0);
+    expect(existsSync(join(home, ".config", "ccmux", "session-pids"))).toBe(
+      true,
+    );
+  });
 });
 
 describe("makePlugin: eager seed", () => {
