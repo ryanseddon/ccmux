@@ -4180,6 +4180,67 @@ describe("App new session dialog", () => {
     }
   });
 
+  it("renders same-named worktrees as separate headers", async () => {
+    const roots = [
+      "/code/one/.claude/worktrees/parking",
+      "/code/two/.claude/worktrees/parking",
+    ];
+    await renderApp(120, 24, { groupBy: "worktree" });
+    sseCallbacks!.onInit(
+      roots.map((worktreeRoot, index) =>
+        session({
+          id: `s${index}`,
+          project: index === 0 ? "one" : "two",
+          cwd: `${worktreeRoot}/src`,
+          paneCwd: `${worktreeRoot}/src`,
+          isWorktree: true,
+          mainRepoRoot: index === 0 ? "/code/one" : "/code/two",
+          worktreeRoot,
+        }),
+      ),
+      null,
+    );
+    await setup.renderOnce();
+
+    const headerRows = setup
+      .captureCharFrame()
+      .split("\n")
+      .filter((line) => line.includes("parking") && line.includes("(1)"));
+    expect(headerRows).toHaveLength(2);
+  });
+
+  it("opens a worktree header at the checkout root from a nested cwd", async () => {
+    const { restore } = withDaemon();
+    const worktreeRoot = "/code/myapp/.claude/worktrees/parking";
+    try {
+      await renderApp(120, 24, { groupBy: "worktree" });
+      sseCallbacks!.onInit(
+        [
+          session({
+            cwd: `${worktreeRoot}/packages/app/src`,
+            paneCwd: `${worktreeRoot}/packages/app/src`,
+            project: "myapp",
+            isWorktree: true,
+            mainRepoRoot: "/code/myapp",
+            worktreeRoot,
+          }),
+        ],
+        null,
+      );
+      await setup.renderOnce();
+      expect(setup.captureCharFrame()).toContain("parking");
+
+      setup.mockInput.pressKey("n");
+      await settle();
+      await setup.renderOnce();
+      const frame = setup.captureCharFrame();
+      expect(frame).toContain(`Directory   ${worktreeRoot}`);
+      expect(frame).not.toContain("Directory   packages/app/src");
+    } finally {
+      restore();
+    }
+  });
+
   it("keeps a member's directory when the group's members disagree on the repo", async () => {
     // The project group key is a repo NAME, not a path, so ~/work/api and
     // ~/oss/api land in ONE group. Taking whichever member happened to carry a

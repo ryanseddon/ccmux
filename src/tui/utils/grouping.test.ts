@@ -105,6 +105,40 @@ describe("getGroupKey", () => {
     expect(getGroupKey(session, "project")).toBe("repos");
     expect(getGroupKey(session, "cwd")).toBe("/home/user/repos");
   });
+
+  it("groups a linked worktree by its authoritative checkout root", () => {
+    const session = mockSession({
+      project: "repo",
+      cwd: "/repos/repo/.claude/worktrees/parking/src/tui",
+      paneCwd: "/repos/repo/.claude/worktrees/parking/src/tui",
+      isWorktree: true,
+      mainRepoRoot: "/repos/repo",
+      worktreeRoot: "/repos/repo/.claude/worktrees/parking",
+    });
+    expect(getGroupKey(session, "worktree")).toBe(
+      "/repos/repo/.claude/worktrees/parking",
+    );
+  });
+
+  it("retains project grouping for main checkouts and non-repositories", () => {
+    expect(
+      getGroupKey(
+        mockSession({
+          project: "repo",
+          isWorktree: false,
+          mainRepoRoot: "/repos/repo",
+          worktreeRoot: "/repos/repo",
+        }),
+        "worktree",
+      ),
+    ).toBe("repo");
+    expect(
+      getGroupKey(
+        mockSession({ project: "scratch", worktreeRoot: null }),
+        "worktree",
+      ),
+    ).toBe("scratch");
+  });
 });
 
 describe("getGroupLabel", () => {
@@ -118,6 +152,12 @@ describe("getGroupLabel", () => {
 
   it("returns key as-is for non-cwd groupBy", () => {
     expect(getGroupLabel("my-project", "project")).toBe("my-project");
+  });
+
+  it("uses the authoritative worktree root basename as its label", () => {
+    expect(
+      getGroupLabel("/repos/repo/.claude/worktrees/parking", "worktree"),
+    ).toBe("parking");
   });
 
   it("returns key as-is if not under home", () => {
@@ -182,6 +222,58 @@ describe("groupSessions", () => {
     expect(groups).toHaveLength(2);
     expect(groups.find((g) => g.key === "dev")?.members).toHaveLength(2);
     expect(groups.find((g) => g.key === "work")?.members).toHaveLength(1);
+  });
+
+  it("keeps nested cwd sessions in one worktree group", () => {
+    const root = "/repos/repo/.claude/worktrees/parking";
+    const groups = groupSessions(
+      [
+        toFiltered(
+          mockSession({
+            id: "a",
+            cwd: root,
+            paneCwd: `${root}/src`,
+            isWorktree: true,
+            worktreeRoot: root,
+          }),
+        ),
+        toFiltered(
+          mockSession({
+            id: "b",
+            cwd: `${root}/packages/app`,
+            paneCwd: `${root}/packages/app`,
+            isWorktree: true,
+            worktreeRoot: root,
+          }),
+        ),
+      ],
+      "worktree",
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({ key: root, label: "parking" });
+    expect(groups[0].members).toHaveLength(2);
+  });
+
+  it("does not collide when different repos have the same worktree basename", () => {
+    const groups = groupSessions(
+      ["/repos/one/worktrees/parking", "/repos/two/worktrees/parking"].map(
+        (worktreeRoot, index) =>
+          toFiltered(
+            mockSession({
+              id: String(index),
+              project: index === 0 ? "one" : "two",
+              isWorktree: true,
+              worktreeRoot,
+            }),
+          ),
+      ),
+      "worktree",
+    );
+    expect(groups.map(({ key }) => key)).toEqual([
+      "/repos/one/worktrees/parking",
+      "/repos/two/worktrees/parking",
+    ]);
+    expect(groups.map(({ label }) => label)).toEqual(["parking", "parking"]);
   });
 });
 
@@ -419,6 +511,45 @@ describe("buildFlatItems", () => {
       expect(headers[1].label).toBe("beta");
     }
   });
+
+  it("uses stable worktree identity for collapse state", () => {
+    const one = "/repos/one/worktrees/parking";
+    const two = "/repos/two/worktrees/parking";
+    const sessions = [one, two].map((worktreeRoot, index) =>
+      toFiltered(
+        mockSession({
+          id: String(index),
+          isWorktree: true,
+          worktreeRoot,
+        }),
+      ),
+    );
+    const items = buildFlatItems(sessions, "worktree", new Set([one]), false);
+    const headers = items.filter((item) => item.type === "header");
+    expect(headers.map((header) => header.label)).toEqual([
+      "parking",
+      "parking",
+    ]);
+    expect(headers.map((header) => header.collapsed)).toEqual([true, false]);
+  });
+
+  it("sorts worktree groups by their visible label, not identity path", () => {
+    const sessions = [
+      "/repos/zeta/worktrees/alpha",
+      "/repos/alpha/worktrees/zeta",
+    ].map((worktreeRoot, index) =>
+      toFiltered(
+        mockSession({ id: String(index), isWorktree: true, worktreeRoot }),
+      ),
+    );
+    const headers = buildFlatItems(
+      sessions,
+      "worktree",
+      new Set(),
+      false,
+    ).filter((item) => item.type === "header");
+    expect(headers.map((header) => header.label)).toEqual(["alpha", "zeta"]);
+  });
 });
 
 describe("getSessionIndex", () => {
@@ -445,14 +576,17 @@ describe("sortGroups", () => {
     const groups: GroupEntry[] = [
       {
         key: "charlie",
+        label: "charlie",
         members: [toFiltered(mockSession({ id: "c", status: "idle" }))],
       },
       {
         key: "alpha",
+        label: "alpha",
         members: [toFiltered(mockSession({ id: "a", status: "working" }))],
       },
       {
         key: "bravo",
+        label: "bravo",
         members: [toFiltered(mockSession({ id: "b", status: "waiting" }))],
       },
     ];
@@ -464,14 +598,17 @@ describe("sortGroups", () => {
     const groups: GroupEntry[] = [
       {
         key: "alpha",
+        label: "alpha",
         members: [toFiltered(mockSession({ id: "a", status: "idle" }))],
       },
       {
         key: "bravo",
+        label: "bravo",
         members: [toFiltered(mockSession({ id: "b", status: "idle" }))],
       },
       {
         key: "charlie",
+        label: "charlie",
         members: [toFiltered(mockSession({ id: "c", status: "idle" }))],
       },
     ];
@@ -483,14 +620,17 @@ describe("sortGroups", () => {
     const groups: GroupEntry[] = [
       {
         key: "alpha",
+        label: "alpha",
         members: [toFiltered(mockSession({ id: "a", status: "idle" }))],
       },
       {
         key: "bravo",
+        label: "bravo",
         members: [toFiltered(mockSession({ id: "b", status: "waiting" }))],
       },
       {
         key: "charlie",
+        label: "charlie",
         members: [toFiltered(mockSession({ id: "c", status: "idle" }))],
       },
     ];
@@ -503,6 +643,7 @@ describe("sortGroups", () => {
     const groups: GroupEntry[] = [
       {
         key: "alpha",
+        label: "alpha",
         members: [toFiltered(mockSession({ id: "a", status: "idle" }))],
       },
     ];
@@ -512,6 +653,7 @@ describe("sortGroups", () => {
 
   const scored = (key: string, ...scores: number[]): GroupEntry => ({
     key,
+    label: key,
     members: scores.map((score, i) => ({
       ...toFiltered(mockSession({ id: `${key}-${i}` })),
       score,

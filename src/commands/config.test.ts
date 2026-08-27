@@ -220,6 +220,20 @@ describe("KNOWN_KEYS.additionalClaudeConfigDirs", () => {
   });
 });
 
+describe("KNOWN_KEYS.groupBy", () => {
+  const spec = KNOWN_KEYS.groupBy!;
+
+  it("accepts worktree grouping", () => {
+    expect(spec.validate("worktree")).toBe(true);
+    expect(spec.parse("worktree")).toBe("worktree");
+    expect(spec.description).toContain("worktree");
+  });
+
+  it("rejects unknown grouping modes", () => {
+    expect(spec.validate("repository")).toBe(false);
+  });
+});
+
 describe("config set notifications.*", () => {
   it("sets notifications.enabled and prints the ccmux notify note", async () => {
     store = {};

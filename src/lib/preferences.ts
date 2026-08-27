@@ -5,12 +5,19 @@ import type { IconStyle } from "./icons";
 import type { AttentionType, SessionStatus } from "../types/session";
 
 /** How sessions are grouped in the TUI */
-export type GroupBy = "project" | "cwd" | "session" | "window" | "none";
+export type GroupBy =
+  | "project"
+  | "worktree"
+  | "cwd"
+  | "session"
+  | "window"
+  | "none";
 
 export const DEFAULT_GROUP_BY: GroupBy = "project";
 
 export const VALID_GROUP_BY: GroupBy[] = [
   "project",
+  "worktree",
   "cwd",
   "session",
   "window",

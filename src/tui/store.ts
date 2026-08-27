@@ -50,6 +50,7 @@ import { isSameServerCached } from "./utils/server-guard";
 import { stripAnsi } from "../lib/strip-ansi";
 import {
   buildFlatItems,
+  getGroupIdentity,
   getGroupKey,
   groupSessions,
   headerGroupKeys,
@@ -1061,7 +1062,7 @@ export function createTUIStore(options: TUIStoreOptions = {}) {
         "gitBranch",
         "lastPrompt",
         (s: EnrichedSession) =>
-          groupBy === "none" ? "" : getGroupKey(s, groupBy),
+          groupBy === "none" ? "" : getGroupIdentity(s, groupBy).label,
         "title",
       ],
       threshold: 0.3,

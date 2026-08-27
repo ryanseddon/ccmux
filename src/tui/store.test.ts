@@ -865,6 +865,9 @@ describe("store", () => {
       expect(store.state.groupBy).toBe("project");
 
       store.actions.cycleGroupBy();
+      expect(store.state.groupBy).toBe("worktree");
+
+      store.actions.cycleGroupBy();
       expect(store.state.groupBy).toBe("cwd");
 
       store.actions.cycleGroupBy();
@@ -902,11 +905,11 @@ describe("store", () => {
       });
 
       store.actions.cycleGroupBy();
-      expect(store.state.groupBy).toBe("cwd");
+      expect(store.state.groupBy).toBe("worktree");
 
       await waitForDebounce();
       expect(persisted).toContainEqual({
-        groupBy: "cwd",
+        groupBy: "worktree",
         collapsedGroups: [],
         pinnedGroups: [],
       });

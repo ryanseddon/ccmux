@@ -1,6 +1,7 @@
 import type { AttentionType, EnrichedSession } from "../../types";
 import { getEffectiveStatus } from "../../daemon/status-machine";
 import { shortenCwd } from "./format";
+import { basename } from "node:path";
 export type { GroupBy } from "../../lib/preferences";
 export { VALID_GROUP_BY, DEFAULT_GROUP_BY } from "../../lib/preferences";
 import type { GroupBy } from "../../lib/preferences";
@@ -86,7 +87,15 @@ export type FlatItem =
 /** A group of sessions keyed for sorting */
 export interface GroupEntry {
   key: string;
+  label: string;
   members: FilteredSession[];
+}
+
+export interface GroupIdentity {
+  /** Stable identity used by collapse and pin state. */
+  key: string;
+  /** Human-readable header, which need not be unique. */
+  label: string;
 }
 
 /** Deliberate group for paneless invoke worker rows under tmux-derived
@@ -111,42 +120,73 @@ function panelessGroupKey(session: EnrichedSession): string | null {
   return null;
 }
 
-/** Derive the group key for a session based on the groupBy mode */
-export function getGroupKey(
+/** Derive a group's independent persisted identity and display label. */
+export function getGroupIdentity(
   session: EnrichedSession,
   groupBy: GroupBy,
-): string {
+): GroupIdentity {
   // Paneless rows co-locate by cwd under project/cwd grouping (matching real
   // sessions in the same directory); under session/window grouping they have
   // no target, so `panelessGroupKey` gives them a deliberate group.
   switch (groupBy) {
     case "project":
-      return session.project || session.cwd;
+      return {
+        key: session.project || session.cwd,
+        label: session.project || session.cwd,
+      };
+    case "worktree":
+      if (session.isWorktree && session.worktreeRoot) {
+        return {
+          key: session.worktreeRoot,
+          label: basename(session.worktreeRoot),
+        };
+      }
+      return {
+        key: session.project || session.cwd,
+        label: session.project || session.cwd,
+      };
     case "cwd":
-      return session.paneCwd || session.cwd;
+      return {
+        key: session.paneCwd || session.cwd,
+        label: shortenCwd(session.paneCwd || session.cwd),
+      };
     case "session": {
       const paneless = panelessGroupKey(session);
-      if (paneless) return paneless;
+      if (paneless) return { key: paneless, label: paneless };
       const target = session.tmuxTarget || "";
       const colonIdx = target.indexOf(":");
-      return colonIdx > 0 ? target.slice(0, colonIdx) : target || "(no tmux)";
+      const key =
+        colonIdx > 0 ? target.slice(0, colonIdx) : target || "(no tmux)";
+      return { key, label: key };
     }
     case "window": {
       const paneless = panelessGroupKey(session);
-      if (paneless) return paneless;
+      if (paneless) return { key: paneless, label: paneless };
       const target = session.tmuxTarget || "";
       const dotIdx = target.lastIndexOf(".");
-      return dotIdx > 0 ? target.slice(0, dotIdx) : target || "(no tmux)";
+      const key = dotIdx > 0 ? target.slice(0, dotIdx) : target || "(no tmux)";
+      return { key, label: key };
     }
     case "none":
-      return "";
+      return { key: "", label: "" };
   }
+}
+
+/** Derive the stable group key for a session. */
+export function getGroupKey(
+  session: EnrichedSession,
+  groupBy: GroupBy,
+): string {
+  return getGroupIdentity(session, groupBy).key;
 }
 
 /** Format a group key into a display label */
 export function getGroupLabel(groupKey: string, groupBy: GroupBy): string {
   if (groupBy === "cwd") {
     return shortenCwd(groupKey);
+  }
+  if (groupBy === "worktree" && groupKey.startsWith("/")) {
+    return basename(groupKey);
   }
   return groupKey;
 }
@@ -188,13 +228,13 @@ export function groupSessions(
   filtered: FilteredSession[],
   groupBy: GroupBy,
 ): GroupEntry[] {
-  const groups = new Map<string, FilteredSession[]>();
+  const groups = new Map<string, GroupEntry>();
   for (const fs of filtered) {
-    const key = getGroupKey(fs.session, groupBy);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(fs);
+    const { key, label } = getGroupIdentity(fs.session, groupBy);
+    if (!groups.has(key)) groups.set(key, { key, label, members: [] });
+    groups.get(key)!.members.push(fs);
   }
-  return [...groups.entries()].map(([key, members]) => ({ key, members }));
+  return [...groups.values()];
 }
 
 /** Extract group keys from the header items in a flat item list */
@@ -235,7 +275,9 @@ export function sortGroups(
   );
 
   // Unpinned: alphabetical (stable order unaffected by session status changes)
-  unpinned.sort((a, b) => a.key.localeCompare(b.key));
+  unpinned.sort(
+    (a, b) => a.label.localeCompare(b.label) || a.key.localeCompare(b.key),
+  );
 
   const ordered = [...pinned, ...unpinned];
   if (byScore) {
@@ -273,12 +315,12 @@ export function buildFlatItems(
   );
 
   const items: FlatItem[] = [];
-  for (const { key, members } of sorted) {
+  for (const { key, label, members } of sorted) {
     const isCollapsed = !isSearching && collapsed.has(key);
     items.push({
       type: "header",
       groupKey: key,
-      label: getGroupLabel(key, groupBy),
+      label,
       count: members.length,
       collapsed: isCollapsed,
       members,

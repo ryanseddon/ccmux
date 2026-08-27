@@ -193,7 +193,7 @@ export const STALE_DAEMON_HINT =
 /** Groupings whose header stands for one directory, so a new session opened
  *  over it can inherit that directory. `session` and `window` group by tmux
  *  location, which says nothing about where their members live. */
-const GROUPINGS_BY_DIRECTORY = new Set<GroupBy>(["project", "cwd"]);
+const GROUPINGS_BY_DIRECTORY = new Set<GroupBy>(["project", "worktree", "cwd"]);
 
 /** `POST /spawn`'s `split` for each placement: a new window is no split. */
 const SPAWN_SPLIT: Record<NewSessionPlacement, "h" | "v" | false> = {
@@ -2218,7 +2218,10 @@ export function App(props: AppProps) {
       // Anything else falls back to a member's own cwd, which is at least a
       // directory one of the sessions is really in. `cwd` grouping keys off
       // the directory itself, so it always takes the member's.
-      if (store.state.groupBy === "project") {
+      if (store.state.groupBy === "worktree") {
+        const root = members[0]?.worktreeRoot;
+        if (members[0]?.isWorktree && root) return { cwd: root };
+      } else if (store.state.groupBy === "project") {
         const roots = new Set(
           members
             .map((member) => member.mainRepoRoot)
